@@ -1,0 +1,2 @@
+matplotlib==3.11.1
+google-cloud-storage==3.13.1

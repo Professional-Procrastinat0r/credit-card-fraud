@@ -1,0 +1,74 @@
+metadata:
+  name: "credit-card-fraud"
+  description: "Credit-card fraud detection data-parallel evaluation"
+  version: "0.3.0"
+
+scripts:
+  main: "src/model.py"
+  reporting: "src/plot_metrics.py"
+
+environment:
+  fraud-model-env:
+    venv: ["requirements.txt"]
+
+  fraud-reporting-env:
+    venv: ["requirements-charts.txt"]
+
+reproducibility:
+  random_seed: 42
+
+data:
+  path: "data/creditcard.csv"
+
+experiment:
+  cache:
+    backend:
+      type: local
+
+  pipeline:
+    process_adjlist: |
+      validate_data train_model
+      train_model prepare_evaluation_data
+      prepare_evaluation_data data_parallel
+      data_parallel evaluate_partition
+      evaluate_partition aggregate_partition_metrics
+      aggregate_partition_metrics plot_data_parallel_metrics
+
+    processes:
+      - name: "validate_data"
+        environment: "fraud-model-env"
+
+      - name: "train_model"
+        environment: "fraud-model-env"
+        parameters:
+          test_size: 0.2
+          random_seed: 42
+          max_iter: 1000
+          class_weight: "balanced"
+
+      - name: "prepare_evaluation_data"
+        environment: "fraud-model-env"
+
+      - name: "data_parallel"
+        description: "Split held-out rows into three scoring partitions"
+        data_parallelism:
+          size: 3
+          data_name: "evaluation_rows"
+
+      - name: "evaluate_partition"
+        environment: "fraud-model-env"
+        parameters:
+          threshold: 0.5
+
+      - name: "aggregate_partition_metrics"
+        code: "main.aggregate_partition_metrics"
+        environment: "fraud-model-env"
+        data_aggregation: true
+
+      - name: "plot_data_parallel_metrics"
+        type: "chart"
+        chart_type: "static"
+        code: "reporting.plot_data_parallel_metrics"
+        environment: "fraud-reporting-env"
+        probe_paths:
+          data_summary: "//*[@name='aggregate_partition_metrics']"

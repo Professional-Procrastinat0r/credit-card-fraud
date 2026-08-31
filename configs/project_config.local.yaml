@@ -1,0 +1,85 @@
+metadata:
+  name: "credit-card-fraud"
+  description: "Credit-card fraud detection nested seed and data parallelism"
+  version: "0.4.0"
+
+scripts:
+  main: "src/model.py"
+  reporting: "src/plot_metrics.py"
+
+environment:
+  fraud-model-env:
+    venv: ["requirements.txt"]
+
+  fraud-reporting-env:
+    venv: ["requirements-charts.txt"]
+
+reproducibility:
+  random_seed: 42
+
+data:
+  path: "data/creditcard.csv"
+
+experiment:
+  cache:
+    backend:
+      type: local
+
+  pipeline:
+    process_adjlist: |
+      validate_data seed_parallel
+      seed_parallel train_model
+      train_model prepare_evaluation_data
+      prepare_evaluation_data data_parallel
+      data_parallel evaluate_partition
+      evaluate_partition aggregate_partition_metrics
+      aggregate_partition_metrics aggregate_seed_data_metrics
+      aggregate_seed_data_metrics plot_seed_data_parallel_metrics
+
+    processes:
+      - name: "validate_data"
+        environment: "fraud-model-env"
+
+      - name: "seed_parallel"
+        description: "Fan out training and held-out evaluation by split seed"
+        seed_parallelism:
+          seeds: [41, 42, 43]
+
+      - name: "train_model"
+        environment: "fraud-model-env"
+        parameters:
+          test_size: 0.2
+          max_iter: 1000
+          class_weight: "balanced"
+
+      - name: "prepare_evaluation_data"
+        environment: "fraud-model-env"
+
+      - name: "data_parallel"
+        description: "Split held-out rows into three scoring partitions"
+        data_parallelism:
+          size: 3
+          data_name: "evaluation_rows"
+
+      - name: "evaluate_partition"
+        environment: "fraud-model-env"
+        parameters:
+          threshold: 0.5
+
+      - name: "aggregate_partition_metrics"
+        code: "main.aggregate_partition_metrics"
+        environment: "fraud-model-env"
+        data_aggregation: true
+
+      - name: "aggregate_seed_data_metrics"
+        code: "main.aggregate_seed_data_metrics"
+        environment: "fraud-model-env"
+        seed_aggregation: true
+
+      - name: "plot_seed_data_parallel_metrics"
+        type: "chart"
+        chart_type: "static"
+        code: "reporting.plot_seed_data_parallel_metrics"
+        environment: "fraud-reporting-env"
+        probe_paths:
+          combined_summary: "//process[@name='aggregate_seed_data_metrics']"

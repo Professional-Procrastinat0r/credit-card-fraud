@@ -1,0 +1,67 @@
+metadata:
+  name: "credit-card-fraud"
+  description: "Credit-card fraud detection seed-sensitivity experiment"
+  version: "0.2.0"
+
+scripts:
+  main: "src/model.py"
+  reporting: "src/plot_metrics.py"
+
+environment:
+  fraud-model-env:
+    venv: ["requirements.txt"]
+
+  fraud-reporting-env:
+    venv: ["requirements-charts.txt"]
+
+reproducibility:
+  random_seed: 42
+
+data:
+  path: "data/creditcard.csv"
+
+experiment:
+  cache:
+    backend:
+      type: local
+
+  pipeline:
+    process_adjlist: |
+      validate_data seed_parallel
+      seed_parallel train_model
+      train_model evaluate_model
+      evaluate_model aggregate_seed_metrics
+      aggregate_seed_metrics plot_seed_metrics
+
+    processes:
+      - name: "validate_data"
+        environment: "fraud-model-env"
+
+      - name: "seed_parallel"
+        description: "Fan out training and evaluation by split seed"
+        seed_parallelism:
+          seeds: [41, 42, 43]
+
+      - name: "train_model"
+        environment: "fraud-model-env"
+        parameters:
+          test_size: 0.2
+          max_iter: 1000
+          class_weight: "balanced"
+
+      - name: "evaluate_model"
+        environment: "fraud-model-env"
+        parameters:
+          threshold: 0.5
+
+      - name: "aggregate_seed_metrics"
+        environment: "fraud-model-env"
+        seed_aggregation: true
+
+      - name: "plot_seed_metrics"
+        type: "chart"
+        chart_type: "static"
+        code: "reporting.plot_seed_metrics"
+        environment: "fraud-reporting-env"
+        probe_paths:
+          seed_summary: "//*[@name='aggregate_seed_metrics']"

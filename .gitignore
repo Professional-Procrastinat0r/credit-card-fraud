@@ -1,0 +1,10 @@
+# ExpOps runtime state
+.credit-card-fraud/
+
+# Local dataset
+data/creditcard.csv
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/

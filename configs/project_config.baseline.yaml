@@ -1,0 +1,59 @@
+metadata:
+  name: "credit-card-fraud"
+  description: "Credit-card fraud detection baseline"
+  version: "0.1.0"
+
+scripts:
+  main: "src/model.py"
+  reporting: "src/plot_metrics.py"
+
+environment:
+  fraud-model-env:
+    venv: ["requirements.txt"]
+
+  fraud-reporting-env:
+    venv: ["requirements-charts.txt"]
+
+reproducibility:
+  random_seed: 42
+
+data:
+  path: "data/creditcard.csv"
+
+experiment:
+  cache:
+    backend:
+      type: local
+
+  pipeline:
+    process_adjlist: |
+      validate_data train_model
+      train_model evaluate_model
+      evaluate_model plot_metrics
+
+    processes:
+      - name: "validate_data"
+        environment: "fraud-model-env"
+
+      - name: "train_model"
+        environment: "fraud-model-env"
+        parameters:
+          test_size: 0.2
+          random_seed: 42
+          max_iter: 1000
+          class_weight: "balanced"
+
+      - name: "evaluate_model"
+        environment: "fraud-model-env"
+        parameters:
+          threshold: 0.5
+
+      - name: "plot_metrics"
+        type: "chart"
+        chart_type: "static"
+        code: "reporting.plot_metrics"
+        environment: "fraud-reporting-env"
+        probe_paths:
+          validation: "//*[@name='validate_data']"
+          train: "//*[@name='train_model']"
+          eval: "//*[@name='evaluate_model']"
