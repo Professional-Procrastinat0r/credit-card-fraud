@@ -24,10 +24,13 @@ experiment:
   cache:
     backend:
       type: local
-      gcp_project: "exp-ops-506607"
-    object_store:
-      type: gcs
-      bucket: "expops-example-credit-card-fraud"
+      # gcp_project: "exp-ops-506607"
+
+    # Leave object_store unset to use the local filesystem. The commented
+    # GCP/GCS settings are retained for the later cloud-storage test.
+    # object_store:
+    #   type: gcs
+    #   bucket: "expops-example-credit-card-fraud"
 
   pipeline:
     process_adjlist: |
