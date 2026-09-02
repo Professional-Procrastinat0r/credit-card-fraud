@@ -2,4 +2,5 @@ numpy==2.5.2
 pandas==3.0.5
 scikit-learn==1.9.0
 joblib==1.5.3
-google-cloud-storage==3.13.1
+# Optional GCS object-store dependency; uncomment for project_config.gcs.yaml.
+# google-cloud-storage==3.13.1

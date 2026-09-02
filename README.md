@@ -52,7 +52,12 @@ The expanded pipeline contains 25 nodes: three training nodes, three held-out pr
 
 The configurations are:
 
-- `configs/project_config.yaml`: active nested seed + data experiment.
+- `configs/project_config.yaml`: active nested seed + data experiment using
+  local SQLite metadata and local filesystem artifacts.
+- `configs/project_config.local.yaml`: clean local-storage copy of the active
+  experiment.
+- `configs/project_config.gcs.yaml`: retained GCS variant for the later cloud
+  storage test.
 - `configs/project_config.data.yaml`: three-partition seed-42 evaluation.
 - `configs/project_config.seed.yaml`: three-seed sensitivity experiment.
 - `configs/project_config.baseline.yaml`: original four-node, seed-42 control.
