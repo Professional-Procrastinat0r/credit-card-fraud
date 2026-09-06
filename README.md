@@ -89,6 +89,7 @@ From the workspace containing both `credit-card-fraud/` and `expops-platform/`:
 ```powershell
 cd D:\NUS\FYP
 $env:MLOPS_WORKSPACE_DIR = "D:\NUS\FYP"
+$env:MLOPS_REDIS_PASSWORD = "<your-redis-password>"
 & ".\expops-platform\.venv\Scripts\expops.exe" run credit-card-fraud --local
 ```
 
@@ -101,12 +102,17 @@ $env:MLOPS_WORKSPACE_BASE_DIR = $runtimeTemp
 $env:MLOPS_ENV_READY = "1"
 $env:PIP_NO_INDEX = "1"
 $env:PYTHONPATH = "D:\NUS\FYP\expops-platform\src"
+$env:MLOPS_REDIS_PASSWORD = "<your-redis-password>"
 
 & ".\credit-card-fraud\.credit-card-fraud\envs\fraud-model-env\Scripts\python.exe" `
     -m expops.main run credit-card-fraud --local
 ```
 
 This workaround assumes the pinned model and reporting environments have already been created.
+
+The commands above match the active Redis configuration. If you enable the
+commented SQL backend instead, set `MLOPS_SQL_PASSWORD` rather than
+`MLOPS_REDIS_PASSWORD`.
 
 ExpOps stores environments, logs, metrics, caches, model spill files, and chart artifacts under:
 

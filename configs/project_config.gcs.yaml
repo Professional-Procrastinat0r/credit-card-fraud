@@ -23,11 +23,11 @@ data:
 experiment:
   cache:
     backend:
-      type: local
-      gcp_project: "exp-ops-506607"
+      type: sqlite
     object_store:
       type: gcs
       bucket: "expops-example-credit-card-fraud"
+      gcp_project: "exp-ops-506607"
 
   pipeline:
     process_adjlist: |
