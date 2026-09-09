@@ -17,6 +17,11 @@ PostgreSQL password through `MLOPS_SQL_PASSWORD`; supply AWS credentials through
 Boto3's standard credential chain. The commented Redis and GCS alternatives use
 `MLOPS_REDIS_PASSWORD` and Google Application Default Credentials, respectively.
 
+Before building the archive, use an `expops-platform` checkout containing the
+SQL metadata and S3 object-store implementations (for example, commit `611415c`
+or a descendant). The required-file checks below reject an older platform
+checkout before it can be uploaded.
+
 ## 1. Build the code archive locally (PowerShell)
 
 Run this from the Windows checkout. The archive contains
@@ -44,6 +49,7 @@ $required = @(
     'credit-card-fraud/configs/project_config.yaml'
     'credit-card-fraud/configs/compute_config.yaml'
     'expops-platform/pyproject.toml'
+    'expops-platform/src/expops/storage/sql_config.py'
     'expops-platform/src/expops/storage/adapters/s3_object_store.py'
 )
 $missing = @($required | Where-Object { $_ -notin $entries })
@@ -85,6 +91,7 @@ test -f "$HOME/fyp-expops/credit-card-fraud/data/creditcard.csv"
 test -f "$HOME/fyp-expops/credit-card-fraud/configs/project_config.yaml"
 test -f "$HOME/fyp-expops/credit-card-fraud/configs/compute_config.yaml"
 test -f "$HOME/fyp-expops/expops-platform/pyproject.toml"
+test -f "$HOME/fyp-expops/expops-platform/src/expops/storage/sql_config.py"
 test -f "$HOME/fyp-expops/expops-platform/src/expops/storage/adapters/s3_object_store.py"
 ```
 

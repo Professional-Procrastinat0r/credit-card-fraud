@@ -63,6 +63,11 @@ The configurations are:
 - `configs/project_config.seed.yaml`: three-seed sensitivity experiment.
 - `configs/project_config.baseline.yaml`: original four-node, seed-42 control.
 
+The active PostgreSQL + S3 configuration requires an `expops-platform`
+checkout containing the SQL metadata and S3 object-store implementations (for
+example, commit `611415c` or a descendant). The current sibling
+`expops-platform/main` checkout does not yet contain those backends.
+
 ## Dataset
 
 Place the untracked dataset at:
