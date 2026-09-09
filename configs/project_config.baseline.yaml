@@ -23,7 +23,7 @@ data:
 experiment:
   cache:
     backend:
-      type: local
+      type: sqlite
 
   pipeline:
     process_adjlist: |

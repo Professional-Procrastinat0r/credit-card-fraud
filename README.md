@@ -53,7 +53,8 @@ The expanded pipeline contains 25 nodes: three training nodes, three held-out pr
 The configurations are:
 
 - `configs/project_config.yaml`: active nested seed + data experiment using
-  local SQLite metadata and local filesystem artifacts.
+  PostgreSQL metadata and Amazon S3 object storage. The Redis metadata and
+  Google Cloud Storage settings remain commented in the same file for reference.
 - `configs/project_config.local.yaml`: clean local-storage copy of the active
   experiment.
 - `configs/project_config.gcs.yaml`: retained GCS variant for the later cloud
@@ -61,6 +62,11 @@ The configurations are:
 - `configs/project_config.data.yaml`: three-partition seed-42 evaluation.
 - `configs/project_config.seed.yaml`: three-seed sensitivity experiment.
 - `configs/project_config.baseline.yaml`: original four-node, seed-42 control.
+
+The active PostgreSQL + S3 configuration requires an `expops-platform`
+checkout containing the SQL metadata and S3 object-store implementations (for
+example, commit `611415c` or a descendant). The current sibling
+`expops-platform/main` checkout does not yet contain those backends.
 
 ## Dataset
 
@@ -89,6 +95,8 @@ From the workspace containing both `credit-card-fraud/` and `expops-platform/`:
 ```powershell
 cd D:\NUS\FYP
 $env:MLOPS_WORKSPACE_DIR = "D:\NUS\FYP"
+$env:MLOPS_SQL_PASSWORD = "<your-sql-password>"
+# $env:MLOPS_REDIS_PASSWORD = "<your-redis-password>"
 & ".\expops-platform\.venv\Scripts\expops.exe" run credit-card-fraud --local
 ```
 
@@ -101,12 +109,20 @@ $env:MLOPS_WORKSPACE_BASE_DIR = $runtimeTemp
 $env:MLOPS_ENV_READY = "1"
 $env:PIP_NO_INDEX = "1"
 $env:PYTHONPATH = "D:\NUS\FYP\expops-platform\src"
+$env:MLOPS_SQL_PASSWORD = "<your-sql-password>"
+# $env:MLOPS_REDIS_PASSWORD = "<your-redis-password>"
 
 & ".\credit-card-fraud\.credit-card-fraud\envs\fraud-model-env\Scripts\python.exe" `
     -m expops.main run credit-card-fraud --local
 ```
 
 This workaround assumes the pinned model and reporting environments have already been created.
+
+The commands above match the active PostgreSQL metadata and S3 object-storage
+configuration. The configured `expops` AWS profile must be available to Boto3.
+If you enable the commented Redis backend instead, use
+`MLOPS_REDIS_PASSWORD`; if you enable GCS, provide Google Application Default
+Credentials.
 
 ExpOps stores environments, logs, metrics, caches, model spill files, and chart artifacts under:
 
