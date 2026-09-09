@@ -5,16 +5,17 @@ archive. The cluster's `/tmp` filesystem has a small per-user quota, so both pip
 temporary files and ExpOps process workspaces are redirected to persistent
 storage under `~/fyp-expops`.
 
-The active `configs/project_config.yaml` uses Redis metadata and Google Cloud
-Storage for object bytes. The same project can use SQL metadata or S3 by
-activating the corresponding commented blocks. The login node and every
+The active `configs/project_config.yaml` uses PostgreSQL metadata and Amazon S3
+for object bytes. The same project can use Redis metadata or Google Cloud
+Storage by activating the corresponding commented blocks. The login node and every
 allocated worker therefore need outbound access to the selected metadata and
 object stores. `~/fyp-expops` must still be a shared filesystem so workers see
 the extracted source, dataset, environments, and temporary roots.
 
 Credentials are not stored in YAML or bundled in the archive. Supply the active
-Redis password through `MLOPS_REDIS_PASSWORD`; supply cloud credentials through
-Google Application Default Credentials or Boto3's standard credential chain.
+PostgreSQL password through `MLOPS_SQL_PASSWORD`; supply AWS credentials through
+Boto3's standard credential chain. The commented Redis and GCS alternatives use
+`MLOPS_REDIS_PASSWORD` and Google Application Default Credentials, respectively.
 
 ## 1. Build the code archive locally (PowerShell)
 
@@ -151,24 +152,23 @@ python3 -m venv .venv
 source .venv/bin/activate
 
 python -m pip install --no-cache-dir --upgrade pip setuptools wheel
-python -m pip install --no-cache-dir -e "./expops-platform[slurm,gcp,redis]"
+python -m pip install --no-cache-dir -e "./expops-platform[slurm,aws,postgres]"
 
 python -m pip check
-python -c 'import expops, dask_jobqueue, redis; from google.cloud import storage; from expops.cluster import ComputeSession; print(expops.__file__)'
+python -c 'import boto3, dask_jobqueue, expops, psycopg; from expops.cluster import ComputeSession; print(expops.__file__)'
 command -v expops
 ```
 
-That command matches the active Redis + GCS configuration. If you activate
-the S3 block in `project_config.yaml`, install and verify the AWS variant instead:
+Those commands match the active PostgreSQL + S3 configuration. The commented
+Redis + GCS alternative can be installed and verified with:
 
 ```bash
-python -m pip install --no-cache-dir -e "./expops-platform[slurm,aws,redis]"
-python -c 'import expops, boto3, dask_jobqueue, redis; from expops.cluster import ComputeSession; print(expops.__file__)'
+# python -m pip install --no-cache-dir -e "./expops-platform[slurm,gcp,redis]"
+# python -c 'import dask_jobqueue, expops, redis; from google.cloud import storage; from expops.cluster import ComputeSession; print(expops.__file__)'
 ```
 
-If you activate the commented PostgreSQL metadata block instead, replace the
-`redis` extra and import with `postgres` and `psycopg`. Optional extras can be
-combined to match any selected metadata/object-store pair.
+Optional extras can be combined to match any selected metadata/object-store
+pair.
 
 Do not continue until `pip check` and the relevant imports succeed. ExpOps also
 installs the selected storage dependencies into the model and reporting
@@ -177,25 +177,32 @@ requirements files solely for backend reconstruction.
 
 ## 5. Configure and verify remote storage credentials
 
-Run the Redis password prompt after each new login. Input is hidden and the
+Run the PostgreSQL password prompt after each new login. Input is hidden and the
 value is not written into shell history:
 
 ```bash
-read -rsp "MLOPS_REDIS_PASSWORD: " MLOPS_REDIS_PASSWORD
+read -rsp "MLOPS_SQL_PASSWORD: " MLOPS_SQL_PASSWORD
 printf '\n'
-export MLOPS_REDIS_PASSWORD
+export MLOPS_SQL_PASSWORD
 
-test -n "${MLOPS_REDIS_PASSWORD:-}"
+test -n "${MLOPS_SQL_PASSWORD:-}"
 
-python -c 'import os, redis; c=redis.Redis(host="afterthought-cakes-button-30026.db.redis.io", port=17421, db=0, password=os.environ["MLOPS_REDIS_PASSWORD"], socket_connect_timeout=5); print("Redis preflight:", c.ping()); c.close()'
+python -c 'import os, psycopg; c=psycopg.connect(host="aws-0-ap-southeast-1.pooler.supabase.com", port=6543, dbname="postgres", user="postgres.dzzzeqtjpdfknbggnotp", password=os.environ["MLOPS_SQL_PASSWORD"], sslmode="require", connect_timeout=5); c.execute("SELECT 1").fetchone(); print("PostgreSQL preflight: OK"); c.close()'
 ```
 
-For the commented PostgreSQL alternative, provide its password through
-`MLOPS_SQL_PASSWORD` instead.
+For the commented Redis alternative, use:
 
-### Google Cloud Storage
+```bash
+# read -rsp "MLOPS_REDIS_PASSWORD: " MLOPS_REDIS_PASSWORD
+# printf '\n'
+# export MLOPS_REDIS_PASSWORD
+# test -n "${MLOPS_REDIS_PASSWORD:-}"
+# python -c 'import os, redis; c=redis.Redis(host="afterthought-cakes-button-30026.db.redis.io", port=17421, db=0, password=os.environ["MLOPS_REDIS_PASSWORD"], socket_connect_timeout=5); print("Redis preflight:", c.ping()); c.close()'
+```
 
-For the currently active GCS backend, use Application Default Credentials that
+### Google Cloud Storage (commented alternative)
+
+For the commented GCS backend, use Application Default Credentials that
 are readable at the same path on the login node and workers. If you must use a
 credential JSON file, keep it outside the project and upload it separately from
 the code archive. Run this locally in PowerShell. This uses one cluster
@@ -234,9 +241,9 @@ bucket. A service-account key is a long-lived secret; use workload identity or
 short-lived credentials instead if the cluster supports them, and delete or
 rotate a temporary test key when it is no longer needed.
 
-### Amazon S3
+### Amazon S3 (active)
 
-For the S3 alternative, the current YAML selects the `expops` profile. If that
+The current YAML selects the `expops` profile. If that
 profile is backed by your local AWS shared credentials file, upload only the
 credentials file. The region is already configured in YAML, so a separate AWS
 config file is unnecessary for this case. If the profile does not exist yet,
@@ -278,7 +285,8 @@ export AWS_SHARED_CREDENTIALS_FILE="$HOME/.config/expops/aws-credentials"
 python -c 'import boto3; c=boto3.Session(profile_name="expops", region_name="ap-southeast-1").client("s3"); c.head_bucket(Bucket="expops-test-bucket-755933694771-ap-southeast-1-an"); print("S3 bucket visible")'
 ```
 
-Use only the GCS or S3 block matching the active object-store configuration.
+Use the S3 block for the active configuration, or the GCS block after enabling
+the commented GCS settings in `project_config.yaml`.
 These checks must run on a host with the same network policy and shared home
 filesystem used by the worker jobs.
 
@@ -312,14 +320,22 @@ mkdir -p \
 
 source .venv/bin/activate
 
-read -rsp "MLOPS_REDIS_PASSWORD: " MLOPS_REDIS_PASSWORD
+read -rsp "MLOPS_SQL_PASSWORD: " MLOPS_SQL_PASSWORD
 printf '\n'
-export MLOPS_REDIS_PASSWORD
+export MLOPS_SQL_PASSWORD
 
-# Active GCS configuration. For S3, export AWS_PROFILE and
-# AWS_DEFAULT_REGION instead, as shown in Step 5.
-export GOOGLE_APPLICATION_CREDENTIALS="$HOME/.config/expops/gcp-service-account.json"
-export GOOGLE_CLOUD_PROJECT="exp-ops-506607"
+# Redis metadata alternative:
+# read -rsp "MLOPS_REDIS_PASSWORD: " MLOPS_REDIS_PASSWORD
+# printf '\n'
+# export MLOPS_REDIS_PASSWORD
+
+export AWS_PROFILE="expops"
+export AWS_DEFAULT_REGION="ap-southeast-1"
+export AWS_SHARED_CREDENTIALS_FILE="$HOME/.config/expops/aws-credentials"
+
+# GCS object-store alternative:
+# export GOOGLE_APPLICATION_CREDENTIALS="$HOME/.config/expops/gcp-service-account.json"
+# export GOOGLE_CLOUD_PROJECT="exp-ops-506607"
 
 ls -lh "$HOME/fyp-expops/credit-card-fraud/data/creditcard.csv"
 python -c 'import tempfile; print(tempfile.gettempdir())'
