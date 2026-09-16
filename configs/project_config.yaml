@@ -18,43 +18,11 @@ reproducibility:
   random_seed: 42
 
 data:
-  path: "data/creditcard.csv"
+  inputs:
+    training:
+      dataset: credit_card_transactions
 
 experiment:
-  cache:
-    backend:
-      type: sql
-      dialect: postgresql
-      # Supply the password at runtime through MLOPS_SQL_PASSWORD.
-      connection:
-        host: aws-0-ap-southeast-1.pooler.supabase.com
-        # port: 5432
-        port: 6543 # Use this for NUS VPN
-        database: postgres
-        username: postgres.dzzzeqtjpdfknbggnotp
-        options:
-          sslmode: require
-
-      # type: redis
-      # # Supply the password at runtime through MLOPS_REDIS_PASSWORD. The Redis
-      # # Cloud connection uses its default user, so no username is required here.
-      # host: afterthought-cakes-button-30026.db.redis.io
-      # port: 17421
-      # db: 0
-      # connection_timeout: 5.0
-
-    # Keep the billing/quota project explicit because user ADC files do not
-    # necessarily contain a default Google Cloud project.
-    object_store:
-      # type: gcs
-      # bucket: "expops-example-credit-card-fraud"
-      # gcp_project: "exp-ops-506607"
-
-      type: s3
-      bucket: expops-test-bucket-755933694771-ap-southeast-1-an
-      region: ap-southeast-1
-      profile: expops
-
   pipeline:
     process_adjlist: |
       validate_data seed_parallel

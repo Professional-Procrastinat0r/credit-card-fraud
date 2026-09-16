@@ -23,7 +23,7 @@ from sklearn.preprocessing import StandardScaler
 from expops.core import log_metric, process
 
 
-DATA_PATH = Path("data/creditcard.csv")
+TRAINING_DATA_SOURCE = "training"
 TARGET_COLUMN = "Class"
 
 FEATURE_COLUMNS = [
@@ -42,6 +42,38 @@ SEED_SUMMARY_METRICS = (
     "f1",
     "alert_rate",
 )
+
+
+def _resolve_data_path(
+    context: Any,
+    data_source: str = TRAINING_DATA_SOURCE,
+) -> Path:
+    """Resolve a logical data source for the current execution process.
+
+    ExpOps materializes object-backed sources independently on every worker.
+    Passing only the logical source name between processes avoids leaking a
+    launcher- or worker-local temporary path into another execution host.
+
+    The project names only this logical role. ExpOps resolves it through the
+    deployment dataset catalogue and supplies a worker-local path.
+    """
+
+    data_paths = getattr(context, "data_paths", {}) if context is not None else {}
+    if data_source not in data_paths:
+        raise KeyError(
+            f"Dataset input {data_source!r} was not supplied by ExpOps. "
+            "Declare it under data.inputs in project_config.yaml and define "
+            "the referenced dataset in compute_config.yaml."
+        )
+    path = Path(data_paths[data_source])
+
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"Dataset source {data_source!r} was not found at {path}. "
+            "Check the named dataset definition in compute_config.yaml."
+        )
+
+    return path.resolve()
 
 
 def _load_train_test(
@@ -159,16 +191,11 @@ def _summarize_seed_metrics(
 
 
 @process()
-def validate_data():
-    """Validate the fraud dataset and expose its path to downstream processes."""
+def validate_data(context=None):
+    """Validate the configured fraud dataset and expose its logical source."""
 
-    if not DATA_PATH.is_file():
-        raise FileNotFoundError(
-            f"Dataset not found at {DATA_PATH}. "
-            "Expected data/creditcard.csv inside the project."
-        )
-
-    df = pd.read_csv(DATA_PATH)
+    data_path = _resolve_data_path(context)
+    df = pd.read_csv(data_path)
 
     if df.empty:
         raise ValueError("The fraud dataset is empty.")
@@ -236,7 +263,9 @@ def validate_data():
     log_metric("fraud_rate", fraud_rate)
 
     return {
-        "data_path": DATA_PATH.as_posix(),
+        # Logical names are portable across workers; absolute temporary paths
+        # are not.
+        "data_source": TRAINING_DATA_SOURCE,
         "row_count": row_count,
         "fraud_count": fraud_count,
         "genuine_count": genuine_count,
@@ -246,14 +275,16 @@ def validate_data():
 
 @process()
 def train_model(
-    data_path,
+    data_source,
     test_size,
     random_seed,
     max_iter,
     class_weight,
+    context=None,
 ):
     """Fit a class-weighted logistic-regression fraud classifier."""
 
+    data_path = _resolve_data_path(context, data_source)
     x_train, _, y_train, _ = _load_train_test(
         data_path=data_path,
         test_size=test_size,
@@ -298,7 +329,7 @@ def train_model(
 
     return {
         "model": model,
-        "data_path": str(data_path),
+        "data_source": str(data_source),
         "test_size": float(test_size),
         "random_seed": int(random_seed),
     }
@@ -307,10 +338,11 @@ def train_model(
 @process()
 def evaluate_model(
     model,
-    data_path,
+    data_source,
     test_size,
     random_seed,
     threshold,
+    context=None,
 ):
     """Evaluate the fitted model on the held-out test partition."""
 
@@ -326,6 +358,7 @@ def evaluate_model(
             f"threshold must be between 0 and 1, got {threshold}"
         )
 
+    data_path = _resolve_data_path(context, data_source)
     _, x_test, _, y_test = _load_train_test(
         data_path=data_path,
         test_size=test_size,
@@ -552,9 +585,10 @@ def _partition_number(partition_key: Any) -> int:
 @process()
 def prepare_evaluation_data(
     model,
-    data_path,
+    data_source,
     test_size,
     random_seed,
+    context=None,
 ):
     """Materialize the held-out rows that ExpOps will partition."""
 
@@ -563,6 +597,7 @@ def prepare_evaluation_data(
             "Expected a fitted classifier with predict_proba()."
         )
 
+    data_path = _resolve_data_path(context, data_source)
     _, x_test, _, y_test = _load_train_test(
         data_path=data_path,
         test_size=test_size,
