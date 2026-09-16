@@ -1,39 +1,43 @@
 # Slurm deployment
 
-This deployment bundles the code and credit-card dataset into one self-contained
-archive. The cluster's `/tmp` filesystem has a small per-user quota, so both pip
-temporary files and ExpOps process workspaces are redirected to persistent
-storage under `~/fyp-expops`.
+This deployment bundles the project and platform code. The training dataset is
+materialized from GCS by ExpOps on each execution worker. The cluster's `/tmp`
+filesystem has a small per-user quota, so pip temporary files, ExpOps process
+workspaces, and materialized data are redirected to persistent storage under
+`~/fyp-expops`.
 
-The active `configs/project_config.yaml` uses PostgreSQL metadata and Amazon S3
-for object bytes. The same project can use Redis metadata or Google Cloud
-Storage by activating the corresponding commented blocks. The login node and every
-allocated worker therefore need outbound access to the selected metadata and
-object stores. `~/fyp-expops` must still be a shared filesystem so workers see
-the extracted source, dataset, environments, and temporary roots.
+The active `configs/compute_config.yaml` uses PostgreSQL metadata, GCS for cache,
+artifacts, and the training dataset, and also declares an S3 object store to
+demonstrate multiple providers. The same project can use Redis metadata by
+activating the commented block. The login node and every allocated worker
+therefore need outbound access to the selected metadata and object stores.
+`~/fyp-expops` must still be a shared filesystem so workers see the extracted
+source, environments, and configured temporary roots.
 
-Credentials are not stored in YAML or bundled in the archive. Supply the active
-PostgreSQL password through `MLOPS_SQL_PASSWORD`; supply AWS credentials through
-Boto3's standard credential chain. The commented Redis and GCS alternatives use
-`MLOPS_REDIS_PASSWORD` and Google Application Default Credentials, respectively.
+Credential values are not stored in YAML or bundled in the archive. The SQL
+plugin reads the active PostgreSQL password from the deployment-selected
+`CREDIT_CARD_FRAUD_SQL_PASSWORD` environment reference. The GCS plugin uses
+Google Application Default Credentials, while the additional S3 plugin
+delegates AWS authentication to Boto3's standard credential chain. The
+commented Redis alternative selects a separate environment reference.
 
-Before building the archive, use an `expops-platform` checkout containing the
-SQL metadata and S3 object-store implementations (for example, commit `611415c`
-or a descendant). The required-file checks below reject an older platform
-checkout before it can be uploaded.
+Before building the archive, use an `expops-platform` checkout containing data
+source materialization, resolved storage plans, plugin-owned authentication,
+and the SQL, GCS, and S3 storage implementations. The required-file checks below
+reject an older platform checkout before it can be uploaded.
 
 ## 1. Build the code archive locally (PowerShell)
 
-Run this from the Windows checkout. The archive contains
-`credit-card-fraud/`, including `data/creditcard.csv`, and `expops-platform/`,
-but excludes environments, runtime files, and frontend dependencies.
+Run this from the Windows checkout. The archive contains `credit-card-fraud/`
+and `expops-platform/`, but excludes the remotely hosted dataset, environments,
+runtime files, and frontend dependencies.
 
 ```powershell
 Set-Location "D:\NUS\FYP"
 
 $archive = "credit-card-fraud-slurm-deploy-$(Get-Date -Format yyyyMMdd-HHmmss).tar.gz"
 
-tar.exe -czf $archive '--exclude=.git' '--exclude=.venv' '--exclude=.pytest_cache' '--exclude=node_modules' '--exclude=.credit-card-fraud' '--exclude=__pycache__' '--exclude=*.pyc' credit-card-fraud expops-platform
+tar.exe -czf $archive '--exclude=.git' '--exclude=.venv' '--exclude=.pytest_cache' '--exclude=node_modules' '--exclude=.credit-card-fraud' '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=creditcard.csv' credit-card-fraud expops-platform
 
 if ($LASTEXITCODE -ne 0) {
     throw "tar.exe failed; do not upload the partial archive"
@@ -45,11 +49,12 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $required = @(
-    'credit-card-fraud/data/creditcard.csv'
     'credit-card-fraud/configs/project_config.yaml'
     'credit-card-fraud/configs/compute_config.yaml'
+    'credit-card-fraud/scripts/inspect_storage_auth.py'
     'expops-platform/pyproject.toml'
     'expops-platform/src/expops/storage/sql_config.py'
+    'expops-platform/src/expops/storage/adapters/gcs_object_store.py'
     'expops-platform/src/expops/storage/adapters/s3_object_store.py'
 )
 $missing = @($required | Where-Object { $_ -notin $entries })
@@ -58,7 +63,7 @@ if ($missing.Count -ne 0) {
 }
 
 $unexpected = @($entries | Where-Object {
-    $_ -match '(^|/)(\.git|\.venv|\.pytest_cache|node_modules|\.credit-card-fraud|__pycache__)(/|$)|\.pyc$'
+    $_ -match '(^|/)(\.git|\.venv|\.pytest_cache|node_modules|\.credit-card-fraud|__pycache__)(/|$)|(^|/)creditcard\.csv$|\.pyc$'
 })
 if ($unexpected.Count -ne 0) {
     throw "Archive contains excluded files: $($unexpected[0..([Math]::Min(9, $unexpected.Count - 1))] -join ', ')"
@@ -87,11 +92,12 @@ tar -xzf "$HOME/credit-card-fraud-slurm-deploy.tar.gz" \
 
 ls -la "$HOME/fyp-expops"
 
-test -f "$HOME/fyp-expops/credit-card-fraud/data/creditcard.csv"
 test -f "$HOME/fyp-expops/credit-card-fraud/configs/project_config.yaml"
 test -f "$HOME/fyp-expops/credit-card-fraud/configs/compute_config.yaml"
+test -f "$HOME/fyp-expops/credit-card-fraud/scripts/inspect_storage_auth.py"
 test -f "$HOME/fyp-expops/expops-platform/pyproject.toml"
 test -f "$HOME/fyp-expops/expops-platform/src/expops/storage/sql_config.py"
+test -f "$HOME/fyp-expops/expops-platform/src/expops/storage/adapters/gcs_object_store.py"
 test -f "$HOME/fyp-expops/expops-platform/src/expops/storage/adapters/s3_object_store.py"
 ```
 
@@ -104,7 +110,8 @@ changes; that is useful for this smoke test but is not a reproducible release.
 Run the complete block after every new login, before creating a virtual
 environment, installing packages, or invoking ExpOps. `TMPDIR` protects Python
 and pip builds; `MLOPS_WORKSPACE_BASE_DIR` protects ExpOps process workspaces;
-the Dask and joblib variables keep their spill files off `/tmp` too.
+`MLOPS_DATA_MATERIALIZATION_DIR` holds worker-local object inputs; the Dask and
+joblib variables keep their spill files off `/tmp` too.
 
 ```bash
 cd "$HOME/fyp-expops"
@@ -120,6 +127,7 @@ export DASK_TEMPORARY_DIRECTORY="$HOME/fyp-expops/.dask"
 
 export MLOPS_WORKSPACE_DIR="$HOME/fyp-expops"
 export MLOPS_WORKSPACE_BASE_DIR="$HOME/fyp-expops/.workspaces"
+export MLOPS_DATA_MATERIALIZATION_DIR="$HOME/fyp-expops/.materialized-data"
 export MLOPS_WORKSPACE_CLEANUP="always"
 export MLOPS_DASK_WAIT_FOR_WORKERS_SEC="120"
 
@@ -129,7 +137,8 @@ mkdir -p \
   "$PIP_CACHE_DIR" \
   "$XDG_CACHE_HOME" \
   "$DASK_TEMPORARY_DIRECTORY" \
-  "$MLOPS_WORKSPACE_BASE_DIR"
+  "$MLOPS_WORKSPACE_BASE_DIR" \
+  "$MLOPS_DATA_MATERIALIZATION_DIR"
 
 chmod 700 \
   "$TMPDIR" \
@@ -137,7 +146,8 @@ chmod 700 \
   "$PIP_CACHE_DIR" \
   "$XDG_CACHE_HOME" \
   "$DASK_TEMPORARY_DIRECTORY" \
-  "$MLOPS_WORKSPACE_BASE_DIR"
+  "$MLOPS_WORKSPACE_BASE_DIR" \
+  "$MLOPS_DATA_MATERIALIZATION_DIR"
 
 quota -s
 python3 -c 'import tempfile; print(tempfile.gettempdir())'
@@ -159,19 +169,20 @@ python3 -m venv .venv
 source .venv/bin/activate
 
 python -m pip install --no-cache-dir --upgrade pip setuptools wheel
-python -m pip install --no-cache-dir -e "./expops-platform[slurm,aws,postgres]"
+python -m pip install --no-cache-dir -e "./expops-platform[slurm,aws,gcp,postgres]"
 
 python -m pip check
-python -c 'import boto3, dask_jobqueue, expops, psycopg; from expops.cluster import ComputeSession; print(expops.__file__)'
+python -c 'import boto3, dask_jobqueue, expops, psycopg; from google.cloud import storage; from expops.cluster import ComputeSession; print(expops.__file__)'
 command -v expops
 ```
 
-Those commands match the active PostgreSQL + S3 configuration. The commented
-Redis + GCS alternative can be installed and verified with:
+Those commands match the active PostgreSQL metadata and declared GCS and S3
+object stores. The commented Redis alternative can be installed and verified
+with:
 
 ```bash
-# python -m pip install --no-cache-dir -e "./expops-platform[slurm,gcp,redis]"
-# python -c 'import dask_jobqueue, expops, redis; from google.cloud import storage; from expops.cluster import ComputeSession; print(expops.__file__)'
+# python -m pip install --no-cache-dir -e "./expops-platform[slurm,aws,gcp,redis]"
+# python -c 'import boto3, dask_jobqueue, expops, redis; from google.cloud import storage; from expops.cluster import ComputeSession; print(expops.__file__)'
 ```
 
 Optional extras can be combined to match any selected metadata/object-store
@@ -184,32 +195,34 @@ requirements files solely for backend reconstruction.
 
 ## 5. Configure and verify remote storage credentials
 
-Run the PostgreSQL password prompt after each new login. Input is hidden and the
-value is not written into shell history:
+Run the PostgreSQL password prompt after each new login. Its name matches the
+explicit `password_ref` in `compute_config.yaml`. Input is hidden and the value
+is not written into shell history:
 
 ```bash
-read -rsp "MLOPS_SQL_PASSWORD: " MLOPS_SQL_PASSWORD
+read -rsp "CREDIT_CARD_FRAUD_SQL_PASSWORD: " CREDIT_CARD_FRAUD_SQL_PASSWORD
 printf '\n'
-export MLOPS_SQL_PASSWORD
+export CREDIT_CARD_FRAUD_SQL_PASSWORD
 
-test -n "${MLOPS_SQL_PASSWORD:-}"
+test -n "${CREDIT_CARD_FRAUD_SQL_PASSWORD:-}"
 
-python -c 'import os, psycopg; c=psycopg.connect(host="aws-0-ap-southeast-1.pooler.supabase.com", port=6543, dbname="postgres", user="postgres.dzzzeqtjpdfknbggnotp", password=os.environ["MLOPS_SQL_PASSWORD"], sslmode="require", connect_timeout=5); c.execute("SELECT 1").fetchone(); print("PostgreSQL preflight: OK"); c.close()'
+python -c 'import os, psycopg; c=psycopg.connect(host="aws-0-ap-southeast-1.pooler.supabase.com", port=6543, dbname="postgres", user="postgres.dzzzeqtjpdfknbggnotp", password=os.environ["CREDIT_CARD_FRAUD_SQL_PASSWORD"], sslmode="require", connect_timeout=5); c.execute("SELECT 1").fetchone(); print("PostgreSQL preflight: OK"); c.close()'
 ```
 
-For the commented Redis alternative, use:
+For the commented Redis alternative, use its independently selected environment
+reference:
 
 ```bash
-# read -rsp "MLOPS_REDIS_PASSWORD: " MLOPS_REDIS_PASSWORD
+# read -rsp "CREDIT_CARD_FRAUD_REDIS_PASSWORD: " CREDIT_CARD_FRAUD_REDIS_PASSWORD
 # printf '\n'
-# export MLOPS_REDIS_PASSWORD
-# test -n "${MLOPS_REDIS_PASSWORD:-}"
-# python -c 'import os, redis; c=redis.Redis(host="afterthought-cakes-button-30026.db.redis.io", port=17421, db=0, password=os.environ["MLOPS_REDIS_PASSWORD"], socket_connect_timeout=5); print("Redis preflight:", c.ping()); c.close()'
+# export CREDIT_CARD_FRAUD_REDIS_PASSWORD
+# test -n "${CREDIT_CARD_FRAUD_REDIS_PASSWORD:-}"
+# python -c 'import os, redis; c=redis.Redis(host="afterthought-cakes-button-30026.db.redis.io", port=17421, db=0, password=os.environ["CREDIT_CARD_FRAUD_REDIS_PASSWORD"], socket_connect_timeout=5); print("Redis preflight:", c.ping()); c.close()'
 ```
 
-### Google Cloud Storage (commented alternative)
+### Google Cloud Storage (active)
 
-For the commented GCS backend, use Application Default Credentials that
+For the active GCS backend, use Application Default Credentials that
 are readable at the same path on the login node and workers. If you must use a
 credential JSON file, keep it outside the project and upload it separately from
 the code archive. Run this locally in PowerShell. This uses one cluster
@@ -240,7 +253,7 @@ chmod 600 "$HOME/.config/expops/gcp-service-account.json"
 export GOOGLE_APPLICATION_CREDENTIALS="$HOME/.config/expops/gcp-service-account.json"
 export GOOGLE_CLOUD_PROJECT="exp-ops-506607"
 
-python -c 'from google.cloud import storage; c=storage.Client(); b=c.bucket("expops-example-credit-card-fraud"); print("GCS bucket visible:", b.exists()); c.close()'
+python -c 'from google.cloud import storage; c=storage.Client(); b=c.bucket("expops-example-credit-card-fraud"); o=b.blob("credit-card-fraud/dataset/creditcard.csv"); print("GCS training object visible:", o.exists()); c.close()'
 ```
 
 The service account should have only the permissions needed for the configured
@@ -248,7 +261,7 @@ bucket. A service-account key is a long-lived secret; use workload identity or
 short-lived credentials instead if the cluster supports them, and delete or
 rotate a temporary test key when it is no longer needed.
 
-### Amazon S3 (active)
+### Amazon S3 (additional configured store)
 
 The current YAML selects the `expops` profile. If that
 profile is backed by your local AWS shared credentials file, upload only the
@@ -289,11 +302,12 @@ export AWS_PROFILE="expops"
 export AWS_DEFAULT_REGION="ap-southeast-1"
 export AWS_SHARED_CREDENTIALS_FILE="$HOME/.config/expops/aws-credentials"
 
-python -c 'import boto3; c=boto3.Session(profile_name="expops", region_name="ap-southeast-1").client("s3"); c.head_bucket(Bucket="expops-test-bucket-755933694771-ap-southeast-1-an"); print("S3 bucket visible")'
+python -c 'import boto3; c=boto3.Session(profile_name="expops", region_name="ap-southeast-1").client("s3"); c.head_object(Bucket="expops-test-bucket-755933694771-ap-southeast-1-an", Key="credit-card-fraud/creditcard.csv"); print("S3 training object visible")'
 ```
 
-Use the S3 block for the active configuration, or the GCS block after enabling
-the commented GCS settings in `project_config.yaml`.
+Use both credential blocks while both object stores remain declared in
+`compute_config.yaml`. The training dataset and cache currently use GCS; the S3
+store is available as an alternative dataset location.
 These checks must run on a host with the same network policy and shared home
 filesystem used by the worker jobs.
 
@@ -314,6 +328,7 @@ export XDG_CACHE_HOME="$HOME/fyp-expops/.cache"
 export DASK_TEMPORARY_DIRECTORY="$HOME/fyp-expops/.dask"
 export MLOPS_WORKSPACE_DIR="$HOME/fyp-expops"
 export MLOPS_WORKSPACE_BASE_DIR="$HOME/fyp-expops/.workspaces"
+export MLOPS_DATA_MATERIALIZATION_DIR="$HOME/fyp-expops/.materialized-data"
 export MLOPS_WORKSPACE_CLEANUP="always"
 export MLOPS_DASK_WAIT_FOR_WORKERS_SEC="120"
 
@@ -323,33 +338,33 @@ mkdir -p \
   "$PIP_CACHE_DIR" \
   "$XDG_CACHE_HOME" \
   "$DASK_TEMPORARY_DIRECTORY" \
-  "$MLOPS_WORKSPACE_BASE_DIR"
+  "$MLOPS_WORKSPACE_BASE_DIR" \
+  "$MLOPS_DATA_MATERIALIZATION_DIR"
 
 source .venv/bin/activate
 
-read -rsp "MLOPS_SQL_PASSWORD: " MLOPS_SQL_PASSWORD
+read -rsp "CREDIT_CARD_FRAUD_SQL_PASSWORD: " CREDIT_CARD_FRAUD_SQL_PASSWORD
 printf '\n'
-export MLOPS_SQL_PASSWORD
+export CREDIT_CARD_FRAUD_SQL_PASSWORD
 
 # Redis metadata alternative:
-# read -rsp "MLOPS_REDIS_PASSWORD: " MLOPS_REDIS_PASSWORD
+# read -rsp "CREDIT_CARD_FRAUD_REDIS_PASSWORD: " CREDIT_CARD_FRAUD_REDIS_PASSWORD
 # printf '\n'
-# export MLOPS_REDIS_PASSWORD
+# export CREDIT_CARD_FRAUD_REDIS_PASSWORD
 
 export AWS_PROFILE="expops"
 export AWS_DEFAULT_REGION="ap-southeast-1"
 export AWS_SHARED_CREDENTIALS_FILE="$HOME/.config/expops/aws-credentials"
 
-# GCS object-store alternative:
-# export GOOGLE_APPLICATION_CREDENTIALS="$HOME/.config/expops/gcp-service-account.json"
-# export GOOGLE_CLOUD_PROJECT="exp-ops-506607"
+export GOOGLE_APPLICATION_CREDENTIALS="$HOME/.config/expops/gcp-service-account.json"
+export GOOGLE_CLOUD_PROJECT="exp-ops-506607"
 
-ls -lh "$HOME/fyp-expops/credit-card-fraud/data/creditcard.csv"
 python -c 'import tempfile; print(tempfile.gettempdir())'
-python -c 'import yaml; from pathlib import Path; c=yaml.safe_load(Path("credit-card-fraud/configs/project_config.yaml").read_text()); cache=c["experiment"]["cache"]; print("metadata:", cache["backend"]["type"], cache["backend"].get("dialect")); print("objects:", cache.get("object_store", {}).get("type", "local"))'
+python credit-card-fraud/scripts/inspect_storage_auth.py
 
 expops run credit-card-fraud
 run_status=$?
+unset CREDIT_CARD_FRAUD_SQL_PASSWORD
 
 latest_log=$(ls -1t "$HOME/fyp-expops/credit-card-fraud/.credit-card-fraud/logs/"*.log 2>/dev/null | head -n 1)
 printf 'ExpOps exit status: %s\n' "$run_status"

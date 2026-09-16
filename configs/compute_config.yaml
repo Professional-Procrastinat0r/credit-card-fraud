@@ -19,3 +19,66 @@ options:
   # Keep both workers eligible for the same node during the smoke run. We can
   # enable node spreading later when measuring multi-node scaling.
   spread_workers_across_nodes: false
+
+# Deployment resources live in one file, but ExpOps parses compute and storage
+# into independent plans with independent ownership and lifecycles.
+storage:
+  metadata:
+    type: sql
+    dialect: postgresql
+    password_ref:
+      source: environment
+      name: CREDIT_CARD_FRAUD_SQL_PASSWORD
+      required: true
+    connection:
+      host: aws-0-ap-southeast-1.pooler.supabase.com
+      port: 6543 # Use this for NUS VPN
+      database: postgres
+      username: postgres.dzzzeqtjpdfknbggnotp
+      options:
+        sslmode: require
+
+    # type: redis
+    # password_ref:
+    #   source: environment
+    #   name: CREDIT_CARD_FRAUD_REDIS_PASSWORD
+    #   required: true
+    # host: afterthought-cakes-button-30026.db.redis.io
+    # port: 17421
+    # db: 0
+    # connection_timeout: 5.0
+
+  object_stores:
+    # Define object storage to use as cache, datasets, etc
+    cache_storage:
+      type: gcs
+      bucket: expops-example-credit-card-fraud
+      gcp_project: exp-ops-506607
+
+    # Dataset bytes are independent from cache/artifact bytes. This S3 store is
+    # retained to demonstrate that a deployment may define another provider.
+    dataset_1:
+      type: s3
+      bucket: expops-test-bucket-755933694771-ap-southeast-1-an
+      region: ap-southeast-1
+      profile: expops
+
+    # The active training dataset is currently read from this GCS store.
+    dataset_2:
+      type: gcs
+      bucket: expops-example-credit-card-fraud
+      gcp_project: exp-ops-506607
+
+  # Select the object store used for cache and artifact bytes.
+  cache:
+    object_store: cache_storage
+    ttl_hours: 24
+
+datasets:
+  credit_card_transactions:
+    type: object
+    # store: dataset_1
+    store: dataset_2
+    # Store keys are relative to ExpOps' project prefix, so this resolves to
+    # gs://expops-example-credit-card-fraud/credit-card-fraud/dataset/creditcard.csv.
+    key: dataset/creditcard.csv

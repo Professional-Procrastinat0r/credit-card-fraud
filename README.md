@@ -1,6 +1,6 @@
 # Credit Card Fraud Detection with ExpOps
 
-This project uses ExpOps to train class-weighted logistic-regression fraud detectors across several split seeds and evaluate each model's held-out predictions with data parallelism. The earlier baseline, seed-only, and data-only experiments remain available as controls.
+This project uses ExpOps to train class-weighted logistic-regression fraud detectors across several split seeds and evaluate each model's held-out predictions with data parallelism. Earlier baseline, seed-only, and data-only results remain documented below as controls.
 
 ## Experiment contract
 
@@ -52,29 +52,118 @@ The expanded pipeline contains 25 nodes: three training nodes, three held-out pr
 
 The configurations are:
 
-- `configs/project_config.yaml`: active nested seed + data experiment using
-  PostgreSQL metadata and Amazon S3 object storage. The Redis metadata and
-  Google Cloud Storage settings remain commented in the same file for reference.
-- `configs/project_config.local.yaml`: clean local-storage copy of the active
-  experiment.
-- `configs/project_config.gcs.yaml`: retained GCS variant for the later cloud
-  storage test.
-- `configs/project_config.data.yaml`: three-partition seed-42 evaluation.
-- `configs/project_config.seed.yaml`: three-seed sensitivity experiment.
-- `configs/project_config.baseline.yaml`: original four-node, seed-42 control.
+- `configs/project_config.yaml`: active nested seed + data experiment. It maps
+  the logical `training` input to a named dataset without owning its location.
+- `configs/compute_config.yaml`: deployment settings: SQL metadata, named GCS
+  and S3 object stores, GCS cache/artifacts, and the GCS-backed named training
+  dataset.
 
-The active PostgreSQL + S3 configuration requires an `expops-platform`
-checkout containing the SQL metadata and S3 object-store implementations (for
-example, commit `611415c` or a descendant). The current sibling
-`expops-platform/main` checkout does not yet contain those backends.
+The active SQL + GCS configuration requires an `expops-platform`
+checkout containing named dataset materialization, `ResolvedDataPlan`,
+`ResolvedStoragePlan`, and plugin-owned authentication.
+
+## Storage authentication example
+
+The active configuration demonstrates two authentication strategies owned by
+the selected storage plugins:
+
+- PostgreSQL uses an explicit `EnvironmentSecretRef` named
+  `CREDIT_CARD_FRAUD_SQL_PASSWORD`. The variable name is part of the safe
+  storage specification; its value is not.
+- GCS delegates authentication to Google Application Default Credentials, so
+  ExpOps does not define or serialize a provider-specific key structure. The
+  additional S3 store demonstrates a second plugin-owned strategy: Boto3's
+  standard provider chain using the non-secret `expops` profile.
+
+Inspect what ExpOps may serialize and send to workers without connecting to
+either backend:
+
+```powershell
+cd D:\NUS\FYP\credit-card-fraud
+$env:PYTHONPATH = "D:\NUS\FYP\expops-platform\src"
+& "..\expops-platform\.venv\Scripts\python.exe" scripts\inspect_storage_auth.py
+```
+
+The credential portion of the printed metadata spec contains only this
+reference:
+
+```json
+{
+  "password_ref": {
+    "name": "CREDIT_CARD_FRAUD_SQL_PASSWORD",
+    "required": true,
+    "source": "environment"
+  }
+}
+```
+
+The actual value is resolved only when the SQL plugin constructs its client in
+the driver or worker process. The script deliberately supplies an empty
+environment and does not open a storage client, so it works without credentials
+or network access.
+
+To use a mounted secret instead, the SQL plugin can be configured with a file
+reference such as the following. The deployment—not ExpOps task payloads—must
+mount the same path wherever the client is constructed:
+
+```yaml
+password_ref:
+  source: file
+  path: /run/secrets/expops/sql-password
+  required: true
+```
 
 ## Dataset
 
-Place the untracked dataset at:
+The active configuration reads the training dataset from:
 
 ```text
-data/creditcard.csv
+gs://expops-example-credit-card-fraud/credit-card-fraud/dataset/creditcard.csv
 ```
+
+The deployment catalogue gives the physical dataset a stable name:
+
+```yaml
+storage:
+  object_stores:
+    dataset_2:
+      type: gcs
+      bucket: expops-example-credit-card-fraud
+      gcp_project: exp-ops-506607
+
+datasets:
+  credit_card_transactions:
+    type: object
+    store: dataset_2
+    # Relative to the resolved project prefix shown below.
+    key: dataset/creditcard.csv
+```
+
+The project configuration maps the role expected by model code to that name:
+
+```yaml
+data:
+  inputs:
+    training:
+      dataset: credit_card_transactions
+```
+
+For this project, the resolved GCS storage spec contributes the
+`credit-card-fraud` prefix and the dataset contributes
+`dataset/creditcard.csv`. Together they address the bucket key
+`credit-card-fraud/dataset/creditcard.csv`; the project prefix must not be
+repeated in the data source.
+
+ExpOps downloads the object into a run-scoped path on each execution worker.
+The model reads that local path from `context.data_paths["training"]` and uses
+`pandas.read_csv`; it does not contain GCS or provider-SDK code. Process results pass
+the logical source name rather than a temporary absolute path, so subsequent
+tasks can resolve their own worker-local copy. ExpOps hashes the materialized
+bytes for cache correctness; there is no checksum field in either YAML file.
+
+To switch to a local file, change only the named dataset definition in
+`compute_config.yaml` to `type: local` with `path: data/creditcard.csv`; every
+project configuration continues to reference `credit_card_transactions`.
 
 Expected dataset properties:
 
@@ -95,9 +184,12 @@ From the workspace containing both `credit-card-fraud/` and `expops-platform/`:
 ```powershell
 cd D:\NUS\FYP
 $env:MLOPS_WORKSPACE_DIR = "D:\NUS\FYP"
-$env:MLOPS_SQL_PASSWORD = "<your-sql-password>"
-# $env:MLOPS_REDIS_PASSWORD = "<your-redis-password>"
-& ".\expops-platform\.venv\Scripts\expops.exe" run credit-card-fraud --local
+$env:CREDIT_CARD_FRAUD_SQL_PASSWORD = Read-Host "PostgreSQL password" -MaskInput
+try {
+    & ".\expops-platform\.venv\Scripts\expops.exe" run credit-card-fraud --local
+} finally {
+    Remove-Item Env:CREDIT_CARD_FRAUD_SQL_PASSWORD -ErrorAction SilentlyContinue
+}
 ```
 
 With the current Windows checkout, existing environments can be run without package-index access and with an explicit writable worker directory:
@@ -109,20 +201,24 @@ $env:MLOPS_WORKSPACE_BASE_DIR = $runtimeTemp
 $env:MLOPS_ENV_READY = "1"
 $env:PIP_NO_INDEX = "1"
 $env:PYTHONPATH = "D:\NUS\FYP\expops-platform\src"
-$env:MLOPS_SQL_PASSWORD = "<your-sql-password>"
-# $env:MLOPS_REDIS_PASSWORD = "<your-redis-password>"
+$env:CREDIT_CARD_FRAUD_SQL_PASSWORD = Read-Host "PostgreSQL password" -MaskInput
 
-& ".\credit-card-fraud\.credit-card-fraud\envs\fraud-model-env\Scripts\python.exe" `
-    -m expops.main run credit-card-fraud --local
+try {
+    & ".\credit-card-fraud\.credit-card-fraud\envs\fraud-model-env\Scripts\python.exe" `
+        -m expops.main run credit-card-fraud --local
+} finally {
+    Remove-Item Env:CREDIT_CARD_FRAUD_SQL_PASSWORD -ErrorAction SilentlyContinue
+}
 ```
 
 This workaround assumes the pinned model and reporting environments have already been created.
 
-The commands above match the active PostgreSQL metadata and S3 object-storage
-configuration. The configured `expops` AWS profile must be available to Boto3.
-If you enable the commented Redis backend instead, use
-`MLOPS_REDIS_PASSWORD`; if you enable GCS, provide Google Application Default
-Credentials.
+The commands above match the active PostgreSQL metadata and GCS cache, artifact,
+and dataset configuration. The SQL plugin resolves
+`CREDIT_CARD_FRAUD_SQL_PASSWORD`, and GCS requires Google Application Default
+Credentials. Because the deployment also declares the S3 example store, the
+`expops` AWS profile and the platform's AWS optional dependency must remain
+available until that unused store is removed from the configuration.
 
 ExpOps stores environments, logs, metrics, caches, model spill files, and chart artifacts under:
 
