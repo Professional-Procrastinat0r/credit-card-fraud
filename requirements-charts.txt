@@ -1,3 +1,1 @@
 matplotlib==3.11.1
-# Optional GCS object-store dependency; uncomment for project_config.gcs.yaml.
-# google-cloud-storage==3.13.1
