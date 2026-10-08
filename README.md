@@ -1,5 +1,10 @@
 # Credit Card Fraud Detection with ExpOps
 
+For the new local-worker VFS workflow, see [the separate mounted baseline](vfs/README.md).
+It uses seed 42 and the same scaler/classifier/holdout procedure in one environment.
+The active nested seed/data-parallel experiment below is unchanged and still uses
+the existing runner; its dataset declarations have not been migrated to VFS paths.
+
 This project uses ExpOps to train class-weighted logistic-regression fraud detectors across several split seeds and evaluate each model's held-out predictions with data parallelism. Earlier baseline, seed-only, and data-only results remain documented below as controls.
 
 ## Experiment contract

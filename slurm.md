@@ -1,5 +1,9 @@
 # Slurm deployment
 
+These instructions remain for the legacy nested experiment. The separate
+[VFS baseline](vfs/README.md) is local-worker-only; mounted SLURM startup and
+validation are deferred. Do not submit its mounted command through this recipe.
+
 This deployment bundles the project and platform code. The training dataset is
 materialized from GCS by ExpOps on each execution worker. The cluster's `/tmp`
 filesystem has a small per-user quota, so pip temporary files, ExpOps process
