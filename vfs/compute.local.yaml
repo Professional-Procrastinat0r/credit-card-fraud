@@ -1,0 +1,32 @@
+# Invoke from this vfs directory. Mount roots resolve from this file; the SQLite
+# database is relative to the native project directory. No cloud credentials needed.
+provider: local
+num_workers: 2
+options:
+  startup_timeout_sec: 90
+  worker_memory: 0
+storage:
+  metadata:
+    type: sql
+    dialect: sqlite
+    connection:
+      database: ../.storage/metadata.db
+  mounts:
+    source:
+      type: local
+      root: project
+      access: staged
+    input:
+      type: local
+      root: ../data
+      access: staged
+    cache:
+      type: local
+      root: .storage/cache
+      access: shared
+      policy:
+        ttl_hours: 24
+    artefact:
+      type: local
+      root: .storage/artefact
+      access: shared
