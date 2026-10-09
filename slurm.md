@@ -4,7 +4,8 @@ These instructions use the original nested experiment in `configs/`, now with
 VFS mounts. Platform support is implemented; the real cluster run remains to be
 validated. The full-data local/cloud-storage cold and cached runs have passed.
 
-This deployment bundles the project and platform code. The training dataset is
+The Git deployment below retrieves the project from its pinned repository commit;
+the archive workflow remains available as a fallback. The training dataset is
 materialized from GCS by ExpOps on each execution worker. The cluster's `/tmp`
 filesystem has a small per-user quota, so pip temporary files, ExpOps process
 workspaces, and materialized data are redirected to persistent storage under
@@ -14,8 +15,8 @@ The active `configs/compute_config.yaml` uses PostgreSQL metadata, GCS for cache
 artifacts, and the training dataset, with commented S3 mount alternatives.
 The same project can use Redis metadata by activating the commented block. The login node and every allocated worker
 therefore need outbound access to the selected metadata and object stores.
-`~/fyp-expops` must still be a shared filesystem so workers see the extracted
-source, environments, and configured temporary roots.
+`~/fyp-expops` must still be a shared filesystem so workers see the
+retrieved or extracted source, environments, and configured temporary roots.
 
 Credential values are not stored in YAML or bundled in the archive. The SQL
 plugin reads the active PostgreSQL password from the deployment-selected
@@ -29,7 +30,60 @@ worker delivery, data materialization, resolved storage plans, plugin-owned
 authentication, and the SQL, GCS, and S3 storage implementations. The required-file
 checks below reject an older platform checkout before it can be uploaded.
 
-## 1. Build the code archive locally (PowerShell)
+## Git mount: deploy with only a compute file
+
+Use this path to test Git retrieval without uploading the fraud source archive.
+The platform must already be available under `~/fyp-expops/expops-platform`
+(or installed with the same VFS/Git/SLURM functionality). This profile does not
+fetch or install the platform itself. Git must be available on the driver and
+workers that access the Git mount.
+
+Download the standalone deployment file on the login node:
+
+```bash
+mkdir -p "$HOME/fyp-expops"
+cd "$HOME/fyp-expops"
+
+# Use main after the PR is merged. Until then, use its branch.
+FRAUD_CONFIG_REF="feature/vfs-project-git-slurm"
+curl --fail --location --output compute.git.slurm.yaml \
+  "https://raw.githubusercontent.com/Professional-Procrastinat0r/credit-card-fraud/$FRAUD_CONFIG_REF/configs/compute.git.slurm.yaml"
+```
+
+The file pins project source commit `242875f4b9f0f516174ac611cef1fd56582a87e3`.
+Its `local` mount is Git-backed; the unchanged project still refers to
+`local/src/model.py` and `local/requirements.txt`. Input, cache and artefact
+mounts match the ordinary SLURM profile, including the commented provider
+alternatives. No second version of the experiment is needed.
+
+Skip archive Steps 1–2. Run the inline quota setup in Step 3, prepare the platform
+environment in Step 4 if needed, and configure credentials in Step 5. Then use
+these commands instead of the checkout command in Step 6:
+
+```bash
+cd "$HOME/fyp-expops"
+
+# Safe source-only check: no jobs, environment builds or database connections.
+expops run --project local --compute compute.git.slurm.yaml --prepare-only
+
+# Start the original nested experiment using SLURM workers.
+expops run --project local --compute compute.git.slurm.yaml
+run_status=$?
+printf 'ExpOps exit status: %s\n' "$run_status"
+unset CREDIT_CARD_FRAUD_SQL_PASSWORD
+```
+
+Source is copied to the project folder printed by the CLI beneath
+`.expops-sources/`; that folder contains `configs/project_config.yaml`, scripts
+and requirements. Its `.credit-card-fraud/logs/` contains the driver logs. Keep
+the parent directory writable and on the shared filesystem. Repeat the same
+command to check cache reuse. Neither `--project` nor `--compute` requires a
+local fraud checkout.
+
+Git source preparation has been verified. Worker startup, credentials, quota and
+completion on the real SLURM cluster still need the upcoming cluster test.
+
+## 1. Build the code archive locally (PowerShell; fallback)
 
 Run this from the Windows checkout. The archive contains `credit-card-fraud/`
 and `expops-platform/`, but excludes the remotely hosted dataset, environments,

@@ -62,6 +62,7 @@ The expanded pipeline contains 25 nodes: three training nodes, three held-out pr
 | `configs/compute.local.yaml` | Two local Dask workers | Local SQLite | Local files under this project |
 | `configs/compute.cloud.yaml` | Two local Dask workers | PostgreSQL | S3 input, GCS cache/artefacts |
 | `configs/compute_config.yaml` | Two SLURM workers | PostgreSQL | GCS input/cache/artefacts, with commented S3 alternatives |
+| `configs/compute.git.slurm.yaml` | Same SLURM deployment, project retrieved from pinned Git commit | PostgreSQL | Same GCS mounts; no fraud checkout required |
 
 The default `compute_config.yaml` remains the SLURM deployment. Select the local
 profile explicitly for a local run without cloud credentials. All profiles mount
@@ -199,6 +200,36 @@ all 25 processes, and its repeated run reused all 25 cached results. The three
 seed branches, nine scoring branches and final PNG were verified. Mounted
 SLURM/remote-worker support exists in the platform; the real fraud-project
 cluster run still needs to be tested.
+
+## Run the same project from Git
+
+With the current ExpOps platform installed, copy only
+[`configs/compute.git.slurm.yaml`](configs/compute.git.slurm.yaml) to the machine
+running the driver. From a writable directory containing that file:
+
+```bash
+expops run --project local --compute compute.git.slurm.yaml --prepare-only
+expops run --project local --compute compute.git.slurm.yaml
+```
+
+The first command retrieves the project without starting workers, building
+environments or opening the metadata database. The second executes it and needs
+the SLURM/storage setup in [slurm.md](slurm.md#git-mount-deploy-with-only-a-compute-file).
+To test with local Dask workers first, add `--local` to the second command; this
+keeps the same remote storage settings.
+
+The Git profile mounts the repository root as `local`, so the project
+configuration, scripts, requirements and nested parallel experiment are the
+same as for a local checkout. `--project local` selects that mount; it is not a
+local folder name. ExpOps retrieves `configs/project_config.yaml` from Git. No
+separate project configuration or source archive is needed on the driver. The
+profile pins source commit `242875f4b9f0f516174ac611cef1fd56582a87e3`; update
+`storage.mounts.local.revision` deliberately when testing newer project code.
+
+This fetches the fraud project only. Install a VFS-capable ExpOps platform
+separately, keep Git on `PATH`, and configure the selected storage credentials.
+The dataset remains in object storage. Source preparation has been tested;
+execution on the real SLURM cluster remains to be validated.
 
 ## Historical results before VFS migration
 

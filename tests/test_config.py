@@ -105,3 +105,20 @@ def test_original_parallel_graph_and_parameters_are_preserved():
         compute = yaml.safe_load((ROOT / "configs" / profile).read_text(encoding="utf-8"))
         assert "datasets" not in compute
         assert "object_stores" not in compute["storage"]
+
+
+def test_git_profile_preserves_the_project_and_slurm_storage_without_clients():
+    config = yaml.safe_load((ROOT / "configs/compute.git.slurm.yaml").read_text(encoding="utf-8"))
+    original = yaml.safe_load((ROOT / "configs/compute_config.yaml").read_text(encoding="utf-8"))
+    git_mount = config["storage"]["mounts"]["local"]
+    assert git_mount["type"] == "git"
+    assert git_mount["repository"] == "https://github.com/Professional-Procrastinat0r/credit-card-fraud.git"
+    assert len(git_mount["revision"]) == 40
+    assert all(character in "0123456789abcdef" for character in git_mount["revision"])
+    config["storage"]["mounts"]["local"] = original["storage"]["mounts"]["local"]
+    assert config == original
+    plan = resolved("compute.git.slurm.yaml")
+    assert plan.mounts["local"].type == "git"
+    for script in project_config()["scripts"].values():
+        assert plan.resolve_namespace_path(script).alias == "local"
+    assert type(plan).from_mapping(plan.to_mapping()) == plan
