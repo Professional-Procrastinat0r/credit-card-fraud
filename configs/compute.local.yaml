@@ -1,0 +1,32 @@
+# Mount sources resolve relative to this file, not the caller's CWD.
+provider: local
+num_workers: 2
+options:
+  startup_timeout_sec: 90
+  worker_memory: 0
+storage:
+  metadata:
+    type: sql
+    dialect: sqlite
+    connection:
+      # SQLite paths resolve relative to the native project root.
+      database: .credit-card-fraud/storage/metadata.db
+  mounts:
+    local:
+      type: local
+      source: ..
+      access: staged
+    input:
+      type: local
+      source: ../data
+      access: staged
+    cache:
+      type: local
+      source: ../.credit-card-fraud/storage/cache
+      access: shared
+      policy:
+        ttl_hours: 24
+    artefact:
+      type: local
+      source: ../.credit-card-fraud/storage/artefact
+      access: shared

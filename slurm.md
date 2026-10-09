@@ -1,32 +1,89 @@
 # Slurm deployment
 
-This deployment bundles the project and platform code. The training dataset is
+These instructions use the original nested experiment in `configs/`, now with
+VFS mounts. Platform support is implemented; the real cluster run remains to be
+validated. The full-data local/cloud-storage cold and cached runs have passed.
+
+The Git deployment below retrieves the project from its pinned repository commit;
+the archive workflow remains available as a fallback. The training dataset is
 materialized from GCS by ExpOps on each execution worker. The cluster's `/tmp`
 filesystem has a small per-user quota, so pip temporary files, ExpOps process
 workspaces, and materialized data are redirected to persistent storage under
 `~/fyp-expops`.
 
 The active `configs/compute_config.yaml` uses PostgreSQL metadata, GCS for cache,
-artifacts, and the training dataset, and also declares an S3 object store to
-demonstrate multiple providers. The same project can use Redis metadata by
-activating the commented block. The login node and every allocated worker
+artifacts, and the training dataset, with commented S3 mount alternatives.
+The same project can use Redis metadata by activating the commented block. The login node and every allocated worker
 therefore need outbound access to the selected metadata and object stores.
-`~/fyp-expops` must still be a shared filesystem so workers see the extracted
-source, environments, and configured temporary roots.
+`~/fyp-expops` must still be a shared filesystem so workers see the
+retrieved or extracted source, environments, and configured temporary roots.
 
 Credential values are not stored in YAML or bundled in the archive. The SQL
 plugin reads the active PostgreSQL password from the deployment-selected
 `CREDIT_CARD_FRAUD_SQL_PASSWORD` environment reference. The GCS plugin uses
-Google Application Default Credentials, while the additional S3 plugin
+Google Application Default Credentials, while an optional S3 mount
 delegates AWS authentication to Boto3's standard credential chain. The
 commented Redis alternative selects a separate environment reference.
 
-Before building the archive, use an `expops-platform` checkout containing data
-source materialization, resolved storage plans, plugin-owned authentication,
-and the SQL, GCS, and S3 storage implementations. The required-file checks below
-reject an older platform checkout before it can be uploaded.
+Before building the archive, use an `expops-platform` checkout containing mounted
+worker delivery, data materialization, resolved storage plans, plugin-owned
+authentication, and the SQL, GCS, and S3 storage implementations. The required-file
+checks below reject an older platform checkout before it can be uploaded.
 
-## 1. Build the code archive locally (PowerShell)
+## Git mount: deploy with only a compute file
+
+Use this path to test Git retrieval without uploading the fraud source archive.
+The platform must already be available under `~/fyp-expops/expops-platform`
+(or installed with the same VFS/Git/SLURM functionality). This profile does not
+fetch or install the platform itself. Git must be available on the driver and
+workers that access the Git mount.
+
+Download the standalone deployment file on the login node:
+
+```bash
+mkdir -p "$HOME/fyp-expops"
+cd "$HOME/fyp-expops"
+
+# Use main after the PR is merged. Until then, use its branch.
+FRAUD_CONFIG_REF="feature/vfs-project-git-slurm"
+curl --fail --location --output compute.git.slurm.yaml \
+  "https://raw.githubusercontent.com/Professional-Procrastinat0r/credit-card-fraud/$FRAUD_CONFIG_REF/configs/compute.git.slurm.yaml"
+```
+
+The file pins project source commit `242875f4b9f0f516174ac611cef1fd56582a87e3`.
+Its `local` mount is Git-backed; the unchanged project still refers to
+`local/src/model.py` and `local/requirements.txt`. Input, cache and artefact
+mounts match the ordinary SLURM profile, including the commented provider
+alternatives. No second version of the experiment is needed.
+
+Skip archive Steps 1–2. Run the inline quota setup in Step 3, prepare the platform
+environment in Step 4 if needed, and configure credentials in Step 5. Then use
+these commands instead of the checkout command in Step 6:
+
+```bash
+cd "$HOME/fyp-expops"
+
+# Safe source-only check: no jobs, environment builds or database connections.
+expops run --project local --compute compute.git.slurm.yaml --prepare-only
+
+# Start the original nested experiment using SLURM workers.
+expops run --project local --compute compute.git.slurm.yaml
+run_status=$?
+printf 'ExpOps exit status: %s\n' "$run_status"
+unset CREDIT_CARD_FRAUD_SQL_PASSWORD
+```
+
+Source is copied to the project folder printed by the CLI beneath
+`.expops-sources/`; that folder contains `configs/project_config.yaml`, scripts
+and requirements. Its `.credit-card-fraud/logs/` contains the driver logs. Keep
+the parent directory writable and on the shared filesystem. Repeat the same
+command to check cache reuse. Neither `--project` nor `--compute` requires a
+local fraud checkout.
+
+Git source preparation has been verified. Worker startup, credentials, quota and
+completion on the real SLURM cluster still need the upcoming cluster test.
+
+## 1. Build the code archive locally (PowerShell; fallback)
 
 Run this from the Windows checkout. The archive contains `credit-card-fraud/`
 and `expops-platform/`, but excludes the remotely hosted dataset, environments,
@@ -37,7 +94,7 @@ Set-Location "D:\NUS\FYP"
 
 $archive = "credit-card-fraud-slurm-deploy-$(Get-Date -Format yyyyMMdd-HHmmss).tar.gz"
 
-tar.exe -czf $archive '--exclude=.git' '--exclude=.venv' '--exclude=.pytest_cache' '--exclude=node_modules' '--exclude=.credit-card-fraud' '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=creditcard.csv' credit-card-fraud expops-platform
+tar.exe -czf $archive '--exclude=.git' '--exclude=.venv' '--exclude=.pytest_cache' '--exclude=graphify-out' '--exclude=.pytest-task-workspaces' '--exclude=.test-workspace' '--exclude=.venvs' '--exclude=.expops-sources' '--exclude=node_modules' '--exclude=.credit-card-fraud' '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=creditcard.csv' credit-card-fraud expops-platform
 
 if ($LASTEXITCODE -ne 0) {
     throw "tar.exe failed; do not upload the partial archive"
@@ -53,6 +110,11 @@ $required = @(
     'credit-card-fraud/configs/compute_config.yaml'
     'credit-card-fraud/scripts/inspect_storage_auth.py'
     'expops-platform/pyproject.toml'
+    'credit-card-fraud/src/model.py'
+    'credit-card-fraud/src/plot_metrics.py'
+    'expops-platform/src/expops/worker_delivery.py'
+    'expops-platform/src/expops/worker_runtime.py'
+    'expops-platform/src/expops/storage/filesystem.py'
     'expops-platform/src/expops/storage/sql_config.py'
     'expops-platform/src/expops/storage/adapters/gcs_object_store.py'
     'expops-platform/src/expops/storage/adapters/s3_object_store.py'
@@ -63,7 +125,7 @@ if ($missing.Count -ne 0) {
 }
 
 $unexpected = @($entries | Where-Object {
-    $_ -match '(^|/)(\.git|\.venv|\.pytest_cache|node_modules|\.credit-card-fraud|__pycache__)(/|$)|(^|/)creditcard\.csv$|\.pyc$'
+    $_ -match '(^|/)(\.git|\.venv|\.pytest_cache|graphify-out|\.pytest-task-workspaces|\.test-workspace|\.venvs|\.expops-sources|node_modules|\.credit-card-fraud|__pycache__)(/|$)|(^|/)creditcard\.csv$|\.pyc$'
 })
 if ($unexpected.Count -ne 0) {
     throw "Archive contains excluded files: $($unexpected[0..([Math]::Min(9, $unexpected.Count - 1))] -join ', ')"
@@ -95,6 +157,11 @@ ls -la "$HOME/fyp-expops"
 test -f "$HOME/fyp-expops/credit-card-fraud/configs/project_config.yaml"
 test -f "$HOME/fyp-expops/credit-card-fraud/configs/compute_config.yaml"
 test -f "$HOME/fyp-expops/credit-card-fraud/scripts/inspect_storage_auth.py"
+test -f "$HOME/fyp-expops/credit-card-fraud/src/model.py"
+test -f "$HOME/fyp-expops/credit-card-fraud/src/plot_metrics.py"
+test -f "$HOME/fyp-expops/expops-platform/src/expops/worker_delivery.py"
+test -f "$HOME/fyp-expops/expops-platform/src/expops/worker_runtime.py"
+test -f "$HOME/fyp-expops/expops-platform/src/expops/storage/filesystem.py"
 test -f "$HOME/fyp-expops/expops-platform/pyproject.toml"
 test -f "$HOME/fyp-expops/expops-platform/src/expops/storage/sql_config.py"
 test -f "$HOME/fyp-expops/expops-platform/src/expops/storage/adapters/gcs_object_store.py"
@@ -176,9 +243,8 @@ python -c 'import boto3, dask_jobqueue, expops, psycopg; from google.cloud impor
 command -v expops
 ```
 
-Those commands match the active PostgreSQL metadata and declared GCS and S3
-object stores. The commented Redis alternative can be installed and verified
-with:
+Those commands install the active PostgreSQL/GCS backends and the optional S3
+alternative. The commented Redis alternative can be installed and verified with:
 
 ```bash
 # python -m pip install --no-cache-dir -e "./expops-platform[slurm,aws,gcp,redis]"
@@ -261,9 +327,10 @@ bucket. A service-account key is a long-lived secret; use workload identity or
 short-lived credentials instead if the cluster supports them, and delete or
 rotate a temporary test key when it is no longer needed.
 
-### Amazon S3 (additional configured store)
+### Amazon S3 (optional mount alternative)
 
-The current YAML selects the `expops` profile. If that
+Skip this section for the active all-GCS SLURM profile. The commented S3 alternatives
+select the `expops` profile. If that
 profile is backed by your local AWS shared credentials file, upload only the
 credentials file. The region is already configured in YAML, so a separate AWS
 config file is unnecessary for this case. If the profile does not exist yet,
@@ -305,13 +372,26 @@ export AWS_SHARED_CREDENTIALS_FILE="$HOME/.config/expops/aws-credentials"
 python -c 'import boto3; c=boto3.Session(profile_name="expops", region_name="ap-southeast-1").client("s3"); c.head_object(Bucket="expops-test-bucket-755933694771-ap-southeast-1-an", Key="credit-card-fraud/creditcard.csv"); print("S3 training object visible")'
 ```
 
-Use both credential blocks while both object stores remain declared in
-`compute_config.yaml`. The training dataset and cache currently use GCS; the S3
-store is available as an alternative dataset location.
+Use the AWS credential block only after activating an S3 mount in
+`compute_config.yaml`. The active input, cache and artefact mounts use GCS.
 These checks must run on a host with the same network policy and shared home
 filesystem used by the worker jobs.
 
 ## 6. Submit the pipeline
+
+The project mounts its source as `local` with `access: staged`. ExpOps delivers
+the mounted source and declared input to workers; model code keeps using
+worker-local materialized paths. The reserved `cache` and `artefact` mounts
+retain managed output storage. Their new GCS prefixes are
+`credit-card-fraud/vfs/cache` and `credit-card-fraud/vfs/artefact`; a first
+migrated run should be treated as cold.
+
+Keep the driver and worker environment setup consistent. On this shared-home
+cluster, the extracted project and its prepared environments are available at
+the same paths. The platform uses these environment paths when they exist on
+the worker; separate hosts can instead supply `options.worker_python` and
+`options.worker_environments`. These are compute-runtime settings. Mounts
+do not select the database or construct Python environments.
 
 After a new login, reactivate the environment and repeat the exports before
 running ExpOps:
@@ -352,9 +432,10 @@ export CREDIT_CARD_FRAUD_SQL_PASSWORD
 # printf '\n'
 # export CREDIT_CARD_FRAUD_REDIS_PASSWORD
 
-export AWS_PROFILE="expops"
-export AWS_DEFAULT_REGION="ap-southeast-1"
-export AWS_SHARED_CREDENTIALS_FILE="$HOME/.config/expops/aws-credentials"
+# Only for an activated S3 alternative:
+# export AWS_PROFILE="expops"
+# export AWS_DEFAULT_REGION="ap-southeast-1"
+# export AWS_SHARED_CREDENTIALS_FILE="$HOME/.config/expops/aws-credentials"
 
 export GOOGLE_APPLICATION_CREDENTIALS="$HOME/.config/expops/gcp-service-account.json"
 export GOOGLE_CLOUD_PROJECT="exp-ops-506607"
@@ -362,7 +443,7 @@ export GOOGLE_CLOUD_PROJECT="exp-ops-506607"
 python -c 'import tempfile; print(tempfile.gettempdir())'
 python credit-card-fraud/scripts/inspect_storage_auth.py
 
-expops run credit-card-fraud
+expops run credit-card-fraud --compute credit-card-fraud/configs/compute_config.yaml
 run_status=$?
 unset CREDIT_CARD_FRAUD_SQL_PASSWORD
 
@@ -375,8 +456,8 @@ if [ -n "$latest_log" ]; then
 fi
 ```
 
-Accept the run only when `run_status` is `0`, the latest log contains the final
-success message, and it contains no `ERROR`, traceback, or failed-process line.
+Accept the run only when `run_status` is `0`, the run metadata says `completed`,
+the latest log contains the final success message, and it contains no `ERROR`, traceback, or failed-process line.
 For S3, lowercase Botocore handler names containing words such as
 `redirect_from_error` are debug internals; the ` - ERROR - ` level marker above
 is the meaningful failure check.

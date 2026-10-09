@@ -1,5 +1,6 @@
 # ExpOps runtime state
 .credit-card-fraud/
+.expops-sources/
 
 # Local dataset
 data/creditcard.csv

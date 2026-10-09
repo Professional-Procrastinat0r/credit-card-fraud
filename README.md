@@ -1,6 +1,10 @@
 # Credit Card Fraud Detection with ExpOps
 
-This project uses ExpOps to train class-weighted logistic-regression fraud detectors across several split seeds and evaluate each model's held-out predictions with data parallelism. Earlier baseline, seed-only, and data-only results remain documented below as controls.
+This project trains class-weighted logistic-regression fraud detectors across
+three split seeds and scores each held-out set in three partitions. The original
+nested experiment now uses VFS mounts through the ordinary ExpOps runner. There
+is one project configuration under `configs/`; the separate VFS baseline has
+been retired.
 
 ## Experiment contract
 
@@ -50,122 +54,51 @@ Average precision and ROC-AUC are not averaged across partitions. They are nonli
 
 The expanded pipeline contains 25 nodes: three training nodes, three held-out preparation nodes, three data splitters, nine partition evaluators, three exact data aggregators, one seed aggregator, and the shared validation, seed-split, and chart nodes.
 
-The configurations are:
+## Configuration and mounted files
 
-- `configs/project_config.yaml`: active nested seed + data experiment. It maps
-  the logical `training` input to a named dataset without owning its location.
-- `configs/compute_config.yaml`: deployment settings: SQL metadata, named GCS
-  and S3 object stores, GCS cache/artifacts, and the GCS-backed named training
-  dataset.
+| File | Workers | Metadata | Input / cache / artefacts |
+| --- | --- | --- | --- |
+| `configs/project_config.yaml` | Same nested experiment in every deployment | — | Declares mounted scripts, requirements and training input |
+| `configs/compute.local.yaml` | Two local Dask workers | Local SQLite | Local files under this project |
+| `configs/compute.cloud.yaml` | Two local Dask workers | PostgreSQL | S3 input, GCS cache/artefacts |
+| `configs/compute_config.yaml` | Two SLURM workers | PostgreSQL | GCS input/cache/artefacts, with commented S3 alternatives |
+| `configs/compute.git.slurm.yaml` | Same SLURM deployment, project retrieved from pinned Git commit | PostgreSQL | Same GCS mounts; no fraud checkout required |
 
-The active SQL + GCS configuration requires an `expops-platform`
-checkout containing named dataset materialization, `ResolvedDataPlan`,
-`ResolvedStoragePlan`, and plugin-owned authentication.
+The default `compute_config.yaml` remains the SLURM deployment. Select the local
+profile explicitly for a local run without cloud credentials. All profiles mount
+this project as `local`, so scripts use `local/src/model.py` and
+`local/src/plot_metrics.py`, and environment requirements use
+`local/requirements.txt` and `local/requirements-charts.txt`.
 
-## Storage authentication example
-
-The active configuration demonstrates two authentication strategies owned by
-the selected storage plugins:
-
-- PostgreSQL uses an explicit `EnvironmentSecretRef` named
-  `CREDIT_CARD_FRAUD_SQL_PASSWORD`. The variable name is part of the safe
-  storage specification; its value is not.
-- GCS delegates authentication to Google Application Default Credentials, so
-  ExpOps does not define or serialize a provider-specific key structure. The
-  additional S3 store demonstrates a second plugin-owned strategy: Boto3's
-  standard provider chain using the non-secret `expops` profile.
-
-Inspect what ExpOps may serialize and send to workers without connecting to
-either backend:
-
-```powershell
-cd D:\NUS\FYP\credit-card-fraud
-$env:PYTHONPATH = "D:\NUS\FYP\expops-platform\src"
-& "..\expops-platform\.venv\Scripts\python.exe" scripts\inspect_storage_auth.py
-```
-
-The credential portion of the printed metadata spec contains only this
-reference:
-
-```json
-{
-  "password_ref": {
-    "name": "CREDIT_CARD_FRAUD_SQL_PASSWORD",
-    "required": true,
-    "source": "environment"
-  }
-}
-```
-
-The actual value is resolved only when the SQL plugin constructs its client in
-the driver or worker process. The script deliberately supplies an empty
-environment and does not open a storage client, so it works without credentials
-or network access.
-
-To use a mounted secret instead, the SQL plugin can be configured with a file
-reference such as the following. The deployment—not ExpOps task payloads—must
-mount the same path wherever the client is constructed:
-
-```yaml
-password_ref:
-  source: file
-  path: /run/secrets/expops/sql-password
-  required: true
-```
-
-## Dataset
-
-The active configuration reads the training dataset from:
-
-```text
-gs://expops-example-credit-card-fraud/credit-card-fraud/dataset/creditcard.csv
-```
-
-The deployment catalogue gives the physical dataset a stable name:
-
-```yaml
-storage:
-  object_stores:
-    dataset_2:
-      type: gcs
-      bucket: expops-example-credit-card-fraud
-      gcp_project: exp-ops-506607
-
-datasets:
-  credit_card_transactions:
-    type: object
-    store: dataset_2
-    # Relative to the resolved project prefix shown below.
-    key: dataset/creditcard.csv
-```
-
-The project configuration maps the role expected by model code to that name:
+The project declares:
 
 ```yaml
 data:
   inputs:
     training:
-      dataset: credit_card_transactions
+      path: input/creditcard.csv
 ```
 
-For this project, the resolved GCS storage spec contributes the
-`credit-card-fraud` prefix and the dataset contributes
-`dataset/creditcard.csv`. Together they address the bucket key
-`credit-card-fraud/dataset/creditcard.csv`; the project prefix must not be
-repeated in the data source.
+Deployment profiles supply the physical location of `input`. Local mount
+`source` values resolve relative to the compute YAML file, rather than the
+caller's working directory. In the local profile, `input` mounts `../data`;
+in the SLURM profile it mounts:
 
-ExpOps downloads the object into a run-scoped path on each execution worker.
-The model reads that local path from `context.data_paths["training"]` and uses
-`pandas.read_csv`; it does not contain GCS or provider-SDK code. Process results pass
-the logical source name rather than a temporary absolute path, so subsequent
-tasks can resolve their own worker-local copy. ExpOps hashes the materialized
-bytes for cache correctness; there is no checksum field in either YAML file.
+```text
+gs://expops-example-credit-card-fraud/credit-card-fraud/dataset/
+```
 
-To switch to a local file, change only the named dataset definition in
-`compute_config.yaml` to `type: local` with `path: data/creditcard.csv`; every
-project configuration continues to reference `credit_card_transactions`.
+The cloud profile instead selects
+`s3://expops-test-bucket-755933694771-ap-southeast-1-an/credit-card-fraud/dataset/`.
+GCS input remains a commented alternative in that profile.
 
-Expected dataset properties:
+No named dataset catalogue or legacy `object_stores` block is needed.
+`vfs://input/creditcard.csv` is an equivalent optional spelling.
+
+## Dataset and cache
+
+Place the local dataset at `data/creditcard.csv`. Expected properties of the
+full credit-card dataset are:
 
 ```text
 Rows:             284,807
@@ -175,56 +108,133 @@ Fraud records:    492
 Fraud prevalence: 0.1727%
 ```
 
-The raw dataset and `.credit-card-fraud/` runtime directory are intentionally excluded from Git.
+The model still reads `context.data_paths["training"]` with `pandas.read_csv`.
+ExpOps materializes the declared input on the execution worker and hashes its
+contents for caching. Passing the logical role between processes lets each
+worker resolve its own copy. Materialization is intentional here; the model
+has not been rewritten to consume a declared streaming input.
 
-## Run locally
+The reserved `cache` and `artefact` mounts remain the unified storage interface
+for process results and reports. Local metadata and output bytes live under
+`.credit-card-fraud/storage/`; environments and logs remain under
+`.credit-card-fraud/`. Remote cache and artefacts use new prefixes
+`credit-card-fraud/vfs/cache` and `credit-card-fraud/vfs/artefact`, followed by
+ExpOps' managed project/purpose keys. Existing cloud data and older outputs are
+left in place. Treat the first migrated run as cold; do not expect old cache
+records or the retired baseline's results to carry over.
 
-From the workspace containing both `credit-card-fraud/` and `expops-platform/`:
+Repeat the same deployment to check cache reuse. Changing input bytes or process
+code should invalidate the affected results. The chart is published through the
+`artefact` mount; use the run's chart reference to find its managed object,
+rather than assuming a flat output filename in the bucket.
+
+The raw dataset and `.credit-card-fraud/` runtime directory are excluded from Git.
+
+## Run locally on Windows
+
+Use the current sibling `expops-platform` checkout with VFS support installed in
+its environment. From this project directory:
 
 ```powershell
-cd D:\NUS\FYP
-$env:MLOPS_WORKSPACE_DIR = "D:\NUS\FYP"
-$env:CREDIT_CARD_FRAUD_SQL_PASSWORD = Read-Host "PostgreSQL password" -MaskInput
+cd D:\NUS\FYP\credit-card-fraud
+& .\scripts\run_experiment.ps1 -Deployment local -ExpOpsExecutable "..\expops-platform\.venv\Scripts\expops.exe"
+```
+
+If `expops` is already on `PATH`, just run
+`.\scripts\run_experiment.ps1`. The helper selects `configs/compute.local.yaml`,
+sets writable workspace/materialization directories under `.credit-card-fraud`,
+and restores the caller's working directory and environment when it exits.
+ExpOps normally builds the two declared environments from their pinned
+requirements. This can require package-index access on first use.
+
+For this checkout's already prepared model and reporting environments, you can
+skip environment construction and run the CLI from the model interpreter's
+environment instead:
+
+```powershell
+$previousEnvReady = $env:MLOPS_ENV_READY
 try {
-    & ".\expops-platform\.venv\Scripts\expops.exe" run credit-card-fraud --local
+    $env:MLOPS_ENV_READY = "1"
+    & .\scripts\run_experiment.ps1 -Deployment local -ExpOpsExecutable ".\.credit-card-fraud\envs\fraud-model-env\Scripts\expops.exe"
 } finally {
-    Remove-Item Env:CREDIT_CARD_FRAUD_SQL_PASSWORD -ErrorAction SilentlyContinue
+    $env:MLOPS_ENV_READY = $previousEnvReady
 }
 ```
 
-With the current Windows checkout, existing environments can be run without package-index access and with an explicit writable worker directory:
+Use this shortcut only when both environments contain their required packages
+and the current platform checkout. Launching from a bare platform interpreter
+with `MLOPS_ENV_READY=1` can miss the model dependencies.
+
+Without the helper, the equivalent CLI command from the parent workspace is:
 
 ```powershell
-$runtimeTemp = "D:\NUS\FYP\credit-card-fraud\.credit-card-fraud\tmp"
-$env:MLOPS_WORKSPACE_DIR = "D:\NUS\FYP"
-$env:MLOPS_WORKSPACE_BASE_DIR = $runtimeTemp
-$env:MLOPS_ENV_READY = "1"
-$env:PIP_NO_INDEX = "1"
-$env:PYTHONPATH = "D:\NUS\FYP\expops-platform\src"
-$env:CREDIT_CARD_FRAUD_SQL_PASSWORD = Read-Host "PostgreSQL password" -MaskInput
-
-try {
-    & ".\credit-card-fraud\.credit-card-fraud\envs\fraud-model-env\Scripts\python.exe" `
-        -m expops.main run credit-card-fraud --local
-} finally {
-    Remove-Item Env:CREDIT_CARD_FRAUD_SQL_PASSWORD -ErrorAction SilentlyContinue
-}
+expops run credit-card-fraud --compute credit-card-fraud/configs/compute.local.yaml
 ```
 
-This workaround assumes the pinned model and reporting environments have already been created.
+Set writable `MLOPS_WORKSPACE_BASE_DIR` and
+`MLOPS_DATA_MATERIALIZATION_DIR` yourself when using that direct command.
 
-The commands above match the active PostgreSQL metadata and GCS cache, artifact,
-and dataset configuration. The SQL plugin resolves
-`CREDIT_CARD_FRAUD_SQL_PASSWORD`, and GCS requires Google Application Default
-Credentials. Because the deployment also declares the S3 example store, the
-`expops` AWS profile and the platform's AWS optional dependency must remain
-available until that unused store is removed from the configuration.
+## Remote storage and SLURM
 
-ExpOps stores environments, logs, metrics, caches, model spill files, and chart artifacts under:
+For local workers with remote storage, select `-Deployment cloud` in the helper.
+PostgreSQL uses the `CREDIT_CARD_FRAUD_SQL_PASSWORD` environment reference;
+GCS uses Application Default Credentials. The cloud profile selects the
+S3 input store with the AWS `expops` profile and uses GCS for cache/artefacts;
+the SLURM profile uses GCS for all three. Commented Redis metadata,
+S3 input and alternative artefact providers remain available. Activate a complete
+alternative block and install/configure its provider before using it. Credential
+values belong in the environment or provider credential files, not YAML.
 
-```text
-credit-card-fraud/.credit-card-fraud/
+Inspect the public storage plan without opening clients or reading credentials:
+
+```powershell
+& "..\expops-platform\.venv\Scripts\python.exe" .\scripts\inspect_storage_auth.py
 ```
+
+This prints the resolved GCS input URI, secret references and worker environment
+names. It does not verify network access or write permissions.
+
+See [slurm.md](slurm.md) for cluster setup, credentials and inline quota
+commands. The full-data local/cloud-storage test on 9 October 2026 completed
+all 25 processes, and its repeated run reused all 25 cached results. The three
+seed branches, nine scoring branches and final PNG were verified. Mounted
+SLURM/remote-worker support exists in the platform; the real fraud-project
+cluster run still needs to be tested.
+
+## Run the same project from Git
+
+With the current ExpOps platform installed, copy only
+[`configs/compute.git.slurm.yaml`](configs/compute.git.slurm.yaml) to the machine
+running the driver. From a writable directory containing that file:
+
+```bash
+expops run --project local --compute compute.git.slurm.yaml --prepare-only
+expops run --project local --compute compute.git.slurm.yaml
+```
+
+The first command retrieves the project without starting workers, building
+environments or opening the metadata database. The second executes it and needs
+the SLURM/storage setup in [slurm.md](slurm.md#git-mount-deploy-with-only-a-compute-file).
+To test with local Dask workers first, add `--local` to the second command; this
+keeps the same remote storage settings.
+
+The Git profile mounts the repository root as `local`, so the project
+configuration, scripts, requirements and nested parallel experiment are the
+same as for a local checkout. `--project local` selects that mount; it is not a
+local folder name. ExpOps retrieves `configs/project_config.yaml` from Git. No
+separate project configuration or source archive is needed on the driver. The
+profile pins source commit `242875f4b9f0f516174ac611cef1fd56582a87e3`; update
+`storage.mounts.local.revision` deliberately when testing newer project code.
+
+This fetches the fraud project only. Install a VFS-capable ExpOps platform
+separately, keep Git on `PATH`, and configure the selected storage credentials.
+The dataset remains in object storage. Source preparation has been tested;
+execution on the real SLURM cluster remains to be validated.
+
+## Historical results before VFS migration
+
+The runs below are recorded controls from the original implementation. They are
+not results of the newly consolidated configuration.
 
 ## Baseline result
 
@@ -336,15 +346,18 @@ Every per-seed metric matches the earlier seed-only experiment. This verifies bo
 
 The generated report is stored as `fraud_seed_data_parallel_report.png` under the run's ExpOps artifact directory.
 
-## Known ExpOps issues exposed by this run
+## Historical platform findings
 
-- On this Windows checkout, the default process workspace `/tmp` resolved to an inaccessible `D:\tmp`; `MLOPS_WORKSPACE_BASE_DIR` was required.
-- The seed aggregator received ordinal keys (`seed1`, `seed2`, `seed3`) even though the expanded process IDs used seeds `41`, `42`, and `43`. Evaluation outputs therefore carry `random_seed` explicitly, and the aggregator treats that value as authoritative.
-- Cache-manifest filenames for seed-parallel nodes contain canonical XPath characters and exceed or violate Windows path rules. The run completed by returning full payloads, but the affected training, evaluation, and aggregation nodes were not persisted as reusable manifests.
-- A partitioned pandas `DataFrame` was spilled and restored by ExpOps as a two-dimensional NumPy array, so its column labels were lost at the parallel boundary. `evaluate_partition` validates the array width and reconstructs the known dataset columns before scoring.
-- The same Windows cache-path limitation affects some data-parallel and aggregation manifests. Full-payload fallback allowed the pipeline to finish correctly, but cache reuse is incomplete for the affected nodes.
+The original Windows runs required a writable workspace instead of the default
+`/tmp` location. Their cache manifests also encountered Windows filename rules,
+and spilled DataFrames could lose column labels. Those observations belong to
+the historical runs above; recheck cache reuse in the current platform before
+using timing results. The model retains its validated array-to-frame fallback.
 
-## Reproducibility snapshot
+Seed aggregation receives ordinal branch keys, so evaluation outputs carry the
+actual `random_seed` and aggregation treats that value as authoritative.
+
+## Historical reproducibility snapshot
 
 The successful baseline used:
 
@@ -367,6 +380,8 @@ a3e6107d8182b928a116098931af66e3df110208
 
 The checkout was not clean at the checkpoint, so the commit hash alone is not a complete byte-for-byte platform snapshot. Commit or otherwise record the local ExpOps changes before presenting the experiment as exactly reproducible.
 
-## Next experiment
+## Next checks
 
-The next useful step is performance scaling rather than another statistical variant: repeat the same nested graph with different worker counts and partition counts, then compare wall-clock time, scheduling overhead, and memory use. Before treating those timings as representative, the Windows cache-path and DataFrame-serialization issues should be isolated as platform fixes because failed manifest reuse can distort repeated-run performance.
+Validate the migrated experiment locally, including a repeated cached run, then
+validate SLURM execution. Once those agree with the statistical controls, vary
+worker and partition counts to measure scheduling overhead and memory use.

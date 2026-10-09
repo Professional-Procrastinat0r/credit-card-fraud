@@ -1,3 +1,6 @@
+# Standalone Git bootstrap: no local credit-card-fraud checkout is required.
+# expops run --project local --compute compute.git.slurm.yaml
+# Pin the project source independently of subsequent deployment/docs changes.
 provider: slurm
 
 # Start conservatively for the first cluster run. The active pipeline expands
@@ -48,12 +51,12 @@ storage:
     # db: 0
     # connection_timeout: 5.0
 
-  # Mount sources resolve relative to this deployment file.
+  # Keep the project's local/... paths while obtaining their files from Git.
   mounts:
     local:
-      type: local
-      source: ..
-      access: staged
+      type: git
+      repository: https://github.com/Professional-Procrastinat0r/credit-card-fraud.git
+      revision: 242875f4b9f0f516174ac611cef1fd56582a87e3
     input:
       type: gcs
       bucket: expops-example-credit-card-fraud
