@@ -195,8 +195,8 @@ processes succeed and the PNG is published, then repeat the identical command
 to check cache reuse. Streaming should not create a new raw `creditcard.csv`
 under the materialization directory; older copies may still exist there.
 Process workspaces, cached intermediate arrays and reports may still use disk.
-The Git profile remains pinned to older source: commit and publish these changes
-and update its revision before testing streaming through a Git mount.
+The Git profile pins the published streaming source. Use the updated compute
+file when repeating a Git-mount test; an older copy can still pin the earlier code.
 
 ## Remote storage and SLURM
 
@@ -247,7 +247,7 @@ configuration, scripts, requirements and nested parallel experiment are the
 same as for a local checkout. `--project local` selects that mount; it is not a
 local folder name. ExpOps retrieves `configs/project_config.yaml` from Git. No
 separate project configuration or source archive is needed on the driver. The
-profile pins source commit `242875f4b9f0f516174ac611cef1fd56582a87e3`; update
+profile pins source commit `46d5ad03ef6fbddb5e3bf1e9c373d18f654b6ee3`; update
 `storage.mounts.local.revision` deliberately when testing newer project code.
 
 This fetches the fraud project only. Install a VFS-capable ExpOps platform

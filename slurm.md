@@ -7,9 +7,8 @@ validated. The full-data local/cloud-storage cold and cached runs have passed.
 The Git deployment below retrieves the project from its pinned repository commit;
 the archive workflow remains available as a fallback. The current local project
 configuration streams the training CSV from GCS into memory on each execution
-worker that needs it. The Git profile still pins an earlier materializing version;
-publish the streaming changes and update its revision before testing that mode
-through Git. The cluster's `/tmp` filesystem has a small per-user quota, so pip
+worker that needs it. The Git profile pins the streaming source as well.
+The cluster's `/tmp` filesystem has a small per-user quota, so pip
 temporary files, ExpOps process workspaces, and any explicitly materialized data
 are redirected to persistent storage under `~/fyp-expops`.
 
@@ -52,7 +51,7 @@ curl --fail --location --output compute.git.slurm.yaml \
   "https://raw.githubusercontent.com/Professional-Procrastinat0r/credit-card-fraud/$FRAUD_CONFIG_REF/configs/compute.git.slurm.yaml"
 ```
 
-The file pins project source commit `242875f4b9f0f516174ac611cef1fd56582a87e3`.
+The file pins project source commit `46d5ad03ef6fbddb5e3bf1e9c373d18f654b6ee3`.
 Its `local` mount is Git-backed; the unchanged project still refers to
 `local/src/model.py` and `local/requirements.txt`. Input, cache and artefact
 mounts match the ordinary SLURM profile, including the commented provider
