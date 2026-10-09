@@ -77,6 +77,7 @@ data:
   inputs:
     training:
       path: input/creditcard.csv
+      mode: stream
 ```
 
 Deployment profiles supply the physical location of `input`. Local mount
@@ -108,11 +109,18 @@ Fraud records:    492
 Fraud prevalence: 0.1727%
 ```
 
-The model still reads `context.data_paths["training"]` with `pandas.read_csv`.
-ExpOps materializes the declared input on the execution worker and hashes its
-contents for caching. Passing the logical role between processes lets each
-worker resolve its own copy. Materialization is intentional here; the model
-has not been rewritten to consume a declared streaming input.
+The project uses `mode: stream`. Validation, training and held-out preparation
+open `context.inputs["training"]` on the current worker and pass the file to
+`pandas.read_csv`. ExpOps verifies content identity for caching without saving a
+raw dataset copy. Pandas still loads the complete CSV into memory; this is not
+incremental or out-of-core training. Each process that needs the CSV opens a
+fresh stream, so remote storage can be read several times during a cold run.
+
+To compare delivery modes, change only `data.inputs.training.mode` to
+`materialize` (or omit it). The same loader also handles materialized inputs.
+Passing the logical role between processes keeps both modes portable across
+workers. Inputs keep the same content identity across modes; changed model
+code can still invalidate earlier cached results.
 
 The reserved `cache` and `artefact` mounts remain the unified storage interface
 for process results and reports. Local metadata and output bytes live under
@@ -173,6 +181,22 @@ expops run credit-card-fraud --compute credit-card-fraud/configs/compute.local.y
 
 Set writable `MLOPS_WORKSPACE_BASE_DIR` and
 `MLOPS_DATA_MATERIALIZATION_DIR` yourself when using that direct command.
+
+To test streaming against the remote dataset with local workers, run the updated
+local checkout with the cloud profile:
+
+```powershell
+expops run credit-card-fraud --compute credit-card-fraud/configs/compute.cloud.yaml
+```
+
+Run it from the parent workspace with the configured AWS, GCS and PostgreSQL
+credentials (or select `-Deployment cloud` in the helper). Check that all 25
+processes succeed and the PNG is published, then repeat the identical command
+to check cache reuse. Streaming should not create a new raw `creditcard.csv`
+under the materialization directory; older copies may still exist there.
+Process workspaces, cached intermediate arrays and reports may still use disk.
+The Git profile remains pinned to older source: commit and publish these changes
+and update its revision before testing streaming through a Git mount.
 
 ## Remote storage and SLURM
 

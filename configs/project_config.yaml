@@ -21,6 +21,8 @@ data:
   inputs:
     training:
       path: "input/creditcard.csv"
+      mode: stream
+      # mode: materialize  # Alternative: supply a worker-local CSV file.
 
 experiment:
   pipeline:

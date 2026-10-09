@@ -2,6 +2,8 @@
 
 import importlib.util
 import inspect
+import io
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -44,8 +46,69 @@ def context_for(frame, tmp_path):
     return SimpleNamespace(data_paths={"training": path})
 
 
+class MemoryInputMount:
+    """Remote-like input: readable bytes, no downloadable native filename."""
+
+    def __init__(self, content):
+        self.content = content
+        self.handles = []
+        self.plan = SimpleNamespace(mounts={"input": SimpleNamespace(type="gcs")})
+
+    def stat(self, address):
+        from expops.storage.filesystem import FileStat
+        from expops.storage.vpath import VPath
+        return FileStat(VPath(address), "file", len(self.content))
+
+    @contextmanager
+    def open(self, address, mode):
+        assert address == "/input/creditcard.csv"
+        assert mode == "rb"
+        with io.BytesIO(self.content) as file:
+            self.handles.append(file)
+            yield file
+
+
+@pytest.fixture(params=["native", "materialize", "stream"])
+def dataset_context(request, tmp_path, monkeypatch):
+    """Exercise the old path contract and both real declared-input modes."""
+    from expops.storage.data_sources import LocalDataset, ObjectDataset, ResolvedDataPlan
+    from expops.storage.object_models import ObjectKey
+    from expops.storage.pipeline_inputs import open_pipeline_inputs
+
+    materialization_root = tmp_path / "materialized"
+    monkeypatch.setenv("MLOPS_DATA_MATERIALIZATION_DIR", str(materialization_root))
+    mounts = []
+    with ExitStack() as stack:
+        def make_context(frame):
+            if request.param == "native":
+                return context_for(frame, tmp_path)
+            if request.param == "stream":
+                filesystem = MemoryInputMount(frame.to_csv(index=False).encode("utf-8"))
+                mounts.append(filesystem)
+                definition = ObjectDataset("input", ObjectKey("creditcard.csv"))
+            else:
+                native = context_for(frame, tmp_path)
+                definition = LocalDataset(str(native.data_paths["training"]))
+                filesystem = None
+            plan = ResolvedDataPlan(
+                "fraud-test", inputs={"training": definition},
+                dataset_names={"training": "training"},
+                modes={"training": request.param},
+            )
+            inputs = stack.enter_context(open_pipeline_inputs(plan, filesystem=filesystem))
+            if request.param == "stream":
+                assert inputs.paths == {}
+            return SimpleNamespace(inputs=inputs, data_paths=dict(inputs.paths))
+        yield make_context
+    for mount in mounts:
+        assert mount.handles and all(file.closed for file in mount.handles)
+    if request.param == "stream":
+        assert not materialization_root.exists()
+        assert not (tmp_path / "training.csv").exists()
+
+
 @pytest.mark.parametrize("failure", ["empty", "missing-column", "extra-column", "nonnumeric", "nan", "inf", "one-class", "nonbinary"])
-def test_invalid_dataset_is_rejected(model, failure, tmp_path):
+def test_invalid_dataset_is_rejected(model, failure, dataset_context):
     frame = synthetic_transactions()
     if failure == "empty":
         frame = frame.iloc[:0]
@@ -62,7 +125,7 @@ def test_invalid_dataset_is_rejected(model, failure, tmp_path):
     else:
         frame.loc[0, "Class"] = 2
     with pytest.raises(ValueError):
-        inspect.unwrap(model.validate_data)(context=context_for(frame, tmp_path))
+        inspect.unwrap(model.validate_data)(context=dataset_context(frame))
 
 
 def test_missing_declared_input_does_not_guess_a_native_file(model, tmp_path, monkeypatch):
@@ -73,13 +136,13 @@ def test_missing_declared_input_does_not_guess_a_native_file(model, tmp_path, mo
 
 
 @pytest.mark.parametrize("seed", [41, 42, 43])
-def test_partition_aggregation_matches_unsplit_holdout_and_train_only_scaling(model, seed, tmp_path):
-    context = context_for(synthetic_transactions(), tmp_path)
+def test_partition_aggregation_matches_unsplit_holdout_and_train_only_scaling(model, seed, dataset_context):
+    context = dataset_context(synthetic_transactions())
     trained = inspect.unwrap(model.train_model)(
         data_source="training", test_size=0.2, random_seed=seed,
         max_iter=1000, class_weight="balanced", context=context,
     )
-    x_train, _, _, _ = model._load_train_test(context.data_paths["training"], 0.2, seed)
+    x_train, _, _, _ = model._load_train_test(context, 0.2, seed)
     np.testing.assert_allclose(trained["model"].named_steps["scaler"].mean_, x_train.mean())
     heldout = inspect.unwrap(model.prepare_evaluation_data)(**trained, context=context)
     partitions = {}
@@ -94,8 +157,8 @@ def test_partition_aggregation_matches_unsplit_holdout_and_train_only_scaling(mo
     assert sum(partition["metrics"]["test_row_count"] for partition in partitions.values()) == control["test_row_count"]
 
 
-def test_seed_summary_retains_real_seeds_and_chart_renders(model, tmp_path, monkeypatch):
-    context = context_for(synthetic_transactions(), tmp_path)
+def test_seed_summary_retains_real_seeds_and_chart_renders(model, tmp_path, monkeypatch, dataset_context):
+    context = dataset_context(synthetic_transactions())
     globals_by_seed, partitions_by_seed = {}, {}
     for ordinal, seed in enumerate((41, 42, 43), start=1):
         trained = inspect.unwrap(model.train_model)("training", 0.2, seed, 1000, "balanced", context=context)
@@ -125,3 +188,43 @@ def test_seed_summary_retains_real_seeds_and_chart_renders(model, tmp_path, monk
         CHART_FUNCS.clear()
         CHART_FUNCS.update(original_charts)
     assert (tmp_path / "fraud_seed_data_parallel_report.png").read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
+
+
+def test_stream_and_materialize_have_identical_splits_predictions_and_cache_identity(model, tmp_path):
+    from expops.storage.data_sources import LocalDataset, ObjectDataset, ResolvedDataPlan
+    from expops.storage.object_models import ObjectKey
+    from expops.storage.pipeline_inputs import open_pipeline_inputs
+
+    frame = synthetic_transactions()
+    native = context_for(frame, tmp_path)
+    source = MemoryInputMount(native.data_paths["training"].read_bytes())
+    outputs, hashes, splits = [], [], []
+    for mode in ("materialize", "stream"):
+        definition = (LocalDataset(str(native.data_paths["training"])) if mode == "materialize"
+                      else ObjectDataset("input", ObjectKey("creditcard.csv")))
+        plan = ResolvedDataPlan(
+            "fraud-test", inputs={"training": definition},
+            dataset_names={"training": "training"}, modes={"training": mode},
+        )
+        with open_pipeline_inputs(plan, filesystem=source) as inputs:
+            context = SimpleNamespace(inputs=inputs, data_paths=dict(inputs.paths))
+            hashes.append(inputs.data_hash)
+            splits.append(model._load_train_test(context, 0.2, 42))
+            validated = inspect.unwrap(model.validate_data)(context=context)
+            trained = inspect.unwrap(model.train_model)(
+                "training", 0.2, 42, 1000, "balanced", context=context,
+            )
+            evaluated = inspect.unwrap(model.evaluate_model)(**trained, threshold=0.5, context=context)
+            heldout = inspect.unwrap(model.prepare_evaluation_data)(**trained, context=context)
+            scores = trained["model"].predict_proba(heldout["evaluation_rows"][model.FEATURE_COLUMNS])
+            outputs.append((validated, evaluated, heldout["evaluation_rows"], scores))
+    assert hashes[0] == hashes[1]
+    for materialized, streamed in zip(splits[0], splits[1]):
+        if isinstance(materialized, pd.DataFrame):
+            pd.testing.assert_frame_equal(materialized, streamed)
+        else:
+            pd.testing.assert_series_equal(materialized, streamed)
+    assert outputs[0][:2] == outputs[1][:2]
+    pd.testing.assert_frame_equal(outputs[0][2], outputs[1][2])
+    np.testing.assert_array_equal(outputs[0][3], outputs[1][3])
+    assert all(file.closed for file in source.handles)

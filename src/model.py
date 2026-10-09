@@ -48,15 +48,7 @@ def _resolve_data_path(
     context: Any,
     data_source: str = TRAINING_DATA_SOURCE,
 ) -> Path:
-    """Resolve a logical data source for the current execution process.
-
-    ExpOps materializes object-backed sources independently on every worker.
-    Passing only the logical source name between processes avoids leaking a
-    launcher- or worker-local temporary path into another execution host.
-
-    The project names only this logical role. ExpOps resolves it through the
-    deployment mounts and supplies a worker-local path.
-    """
+    """Support contexts that supply only worker-local materialized paths."""
 
     data_paths = getattr(context, "data_paths", {}) if context is not None else {}
     if data_source not in data_paths:
@@ -76,24 +68,44 @@ def _resolve_data_path(
     return path.resolve()
 
 
+def _load_dataset(
+    context: Any,
+    data_source: str = TRAINING_DATA_SOURCE,
+) -> pd.DataFrame:
+    """Read a declared CSV input without requiring a local copy.
+
+    ExpOps' input API works for both streaming and materialized modes. Open a
+    fresh stream on the current worker and close it before returning the frame.
+    Keep the path fallback for contexts created by older runners or callers.
+    """
+
+    # Previous path-based loader, for YAML mode: materialize only:
+    # data_path = _resolve_data_path(context, data_source)
+    # return pd.read_csv(data_path)
+    # The active input API below works with either mode.
+
+    inputs = getattr(context, "inputs", None)
+    if inputs is not None and data_source in inputs:
+        with inputs[data_source].open("r", encoding="utf-8", newline="") as file:
+            return pd.read_csv(file)
+
+    return pd.read_csv(_resolve_data_path(context, data_source))
+
+
 def _load_train_test(
-    data_path: str,
+    context: Any,
     test_size: float,
     random_seed: int,
+    data_source: str = TRAINING_DATA_SOURCE,
 ):
     """Load the dataset and produce a deterministic stratified split."""
-
-    path = Path(data_path)
-
-    if not path.is_file():
-        raise FileNotFoundError(f"Dataset not found at {path}")
 
     if not 0.0 < float(test_size) < 1.0:
         raise ValueError(
             f"test_size must be between 0 and 1, got {test_size}"
         )
 
-    df = pd.read_csv(path)
+    df = _load_dataset(context, data_source)
 
     x = df[FEATURE_COLUMNS]
     y = df[TARGET_COLUMN].astype(int)
@@ -194,8 +206,7 @@ def _summarize_seed_metrics(
 def validate_data(context=None):
     """Validate the configured fraud dataset and expose its logical source."""
 
-    data_path = _resolve_data_path(context)
-    df = pd.read_csv(data_path)
+    df = _load_dataset(context)
 
     if df.empty:
         raise ValueError("The fraud dataset is empty.")
@@ -284,9 +295,9 @@ def train_model(
 ):
     """Fit a class-weighted logistic-regression fraud classifier."""
 
-    data_path = _resolve_data_path(context, data_source)
     x_train, _, y_train, _ = _load_train_test(
-        data_path=data_path,
+        context=context,
+        data_source=data_source,
         test_size=test_size,
         random_seed=random_seed,
     )
@@ -358,9 +369,9 @@ def evaluate_model(
             f"threshold must be between 0 and 1, got {threshold}"
         )
 
-    data_path = _resolve_data_path(context, data_source)
     _, x_test, _, y_test = _load_train_test(
-        data_path=data_path,
+        context=context,
+        data_source=data_source,
         test_size=test_size,
         random_seed=random_seed,
     )
@@ -597,9 +608,9 @@ def prepare_evaluation_data(
             "Expected a fitted classifier with predict_proba()."
         )
 
-    data_path = _resolve_data_path(context, data_source)
     _, x_test, _, y_test = _load_train_test(
-        data_path=data_path,
+        context=context,
+        data_source=data_source,
         test_size=test_size,
         random_seed=random_seed,
     )

@@ -5,11 +5,13 @@ VFS mounts. Platform support is implemented; the real cluster run remains to be
 validated. The full-data local/cloud-storage cold and cached runs have passed.
 
 The Git deployment below retrieves the project from its pinned repository commit;
-the archive workflow remains available as a fallback. The training dataset is
-materialized from GCS by ExpOps on each execution worker. The cluster's `/tmp`
-filesystem has a small per-user quota, so pip temporary files, ExpOps process
-workspaces, and materialized data are redirected to persistent storage under
-`~/fyp-expops`.
+the archive workflow remains available as a fallback. The current local project
+configuration streams the training CSV from GCS into memory on each execution
+worker that needs it. The Git profile still pins an earlier materializing version;
+publish the streaming changes and update its revision before testing that mode
+through Git. The cluster's `/tmp` filesystem has a small per-user quota, so pip
+temporary files, ExpOps process workspaces, and any explicitly materialized data
+are redirected to persistent storage under `~/fyp-expops`.
 
 The active `configs/compute_config.yaml` uses PostgreSQL metadata, GCS for cache,
 artifacts, and the training dataset, with commented S3 mount alternatives.
@@ -380,9 +382,10 @@ filesystem used by the worker jobs.
 ## 6. Submit the pipeline
 
 The project mounts its source as `local` with `access: staged`. ExpOps delivers
-the mounted source and declared input to workers; model code keeps using
-worker-local materialized paths. The reserved `cache` and `artefact` mounts
-retain managed output storage. Their new GCS prefixes are
+the mounted source to workers; the current model opens the declared training
+input through `context.inputs["training"]` and reads it into memory. Changing the
+input mode to `materialize` also works with this loader. The reserved `cache`
+and `artefact` mounts retain managed output storage. Their new GCS prefixes are
 `credit-card-fraud/vfs/cache` and `credit-card-fraud/vfs/artefact`; a first
 migrated run should be treated as cold.
 

@@ -50,7 +50,7 @@ def test_profiles_resolve_scripts_requirements_and_input_without_clients(profile
     )
     assert data.inputs["training"].store == "input"
     assert str(data.inputs["training"].key) == "creditcard.csv"
-    assert data.modes.get("training", "materialize") == "materialize"
+    assert data.modes["training"] == "stream"
     assert plan.mounts["cache"].cache_ttl_hours == 24
     for alias in ("cache", "artefact"):
         if plan.mounts[alias].type == "local":
@@ -100,7 +100,7 @@ def test_original_parallel_graph_and_parameters_are_preserved():
     assert len(parsed.processes) == 9
     assert len(expand_process_graph(parsed.processes)) == 25
     assert set(project["environment"]) == {"fraud-model-env", "fraud-reporting-env"}
-    assert project["data"]["inputs"]["training"] == {"path": "input/creditcard.csv"}
+    assert project["data"]["inputs"]["training"] == {"path": "input/creditcard.csv", "mode": "stream"}
     for profile in ("compute.local.yaml", "compute.cloud.yaml", "compute_config.yaml"):
         compute = yaml.safe_load((ROOT / "configs" / profile).read_text(encoding="utf-8"))
         assert "datasets" not in compute
