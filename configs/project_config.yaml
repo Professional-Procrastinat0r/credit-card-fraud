@@ -1,18 +1,18 @@
 metadata:
   name: "credit-card-fraud"
   description: "Credit-card fraud detection nested seed and data parallelism"
-  version: "0.4.0"
+  version: "0.5.0"
 
 scripts:
-  main: "src/model.py"
-  reporting: "src/plot_metrics.py"
+  main: "local/src/model.py"
+  reporting: "local/src/plot_metrics.py"
 
 environment:
   fraud-model-env:
-    venv: ["requirements.txt"]
+    venv: ["local/requirements.txt"]
 
   fraud-reporting-env:
-    venv: ["requirements-charts.txt"]
+    venv: ["local/requirements-charts.txt"]
 
 reproducibility:
   random_seed: 42
@@ -20,7 +20,7 @@ reproducibility:
 data:
   inputs:
     training:
-      dataset: credit_card_transactions
+      path: "input/creditcard.csv"
 
 experiment:
   pipeline:

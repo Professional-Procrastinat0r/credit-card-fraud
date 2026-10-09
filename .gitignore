@@ -1,8 +1,5 @@
 # ExpOps runtime state
 .credit-card-fraud/
-vfs/.storage/
-vfs/.run/
-vfs/project/.project/
 .expops-sources/
 
 # Local dataset

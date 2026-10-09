@@ -1,5 +1,4 @@
-# Invoke from this vfs directory. Mount roots resolve from this file; the SQLite
-# database is relative to the native project directory. No cloud credentials needed.
+# Mount sources resolve relative to this file, not the caller's CWD.
 provider: local
 num_workers: 2
 options:
@@ -10,23 +9,24 @@ storage:
     type: sql
     dialect: sqlite
     connection:
-      database: ../.storage/metadata.db
+      # SQLite paths resolve relative to the native project root.
+      database: .credit-card-fraud/storage/metadata.db
   mounts:
-    source:
+    local:
       type: local
-      root: project
+      source: ..
       access: staged
     input:
       type: local
-      root: ../data
+      source: ../data
       access: staged
     cache:
       type: local
-      root: .storage/cache
+      source: ../.credit-card-fraud/storage/cache
       access: shared
       policy:
         ttl_hours: 24
     artefact:
       type: local
-      root: .storage/artefact
+      source: ../.credit-card-fraud/storage/artefact
       access: shared

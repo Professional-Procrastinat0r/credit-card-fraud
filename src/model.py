@@ -55,22 +55,22 @@ def _resolve_data_path(
     launcher- or worker-local temporary path into another execution host.
 
     The project names only this logical role. ExpOps resolves it through the
-    deployment dataset catalogue and supplies a worker-local path.
+    deployment mounts and supplies a worker-local path.
     """
 
     data_paths = getattr(context, "data_paths", {}) if context is not None else {}
     if data_source not in data_paths:
         raise KeyError(
             f"Dataset input {data_source!r} was not supplied by ExpOps. "
-            "Declare it under data.inputs in project_config.yaml and define "
-            "the referenced dataset in compute_config.yaml."
+            "Declare its path under data.inputs in project_config.yaml and define "
+            "the referenced mount in the selected compute configuration."
         )
     path = Path(data_paths[data_source])
 
     if not path.is_file():
         raise FileNotFoundError(
             f"Dataset source {data_source!r} was not found at {path}. "
-            "Check the named dataset definition in compute_config.yaml."
+            "Check the input mount in the selected compute configuration."
         )
 
     return path.resolve()

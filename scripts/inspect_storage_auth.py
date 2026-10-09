@@ -13,7 +13,7 @@ from pathlib import Path
 import yaml
 
 from expops.storage import (
-    load_dataset_catalog,
+    DatasetCatalog,
     load_storage_config,
     resolve_data_plan,
     resolve_storage_plan,
@@ -47,9 +47,11 @@ def main() -> None:
     data_plan = resolve_data_plan(
         PROJECT_ID,
         project_config,
-        load_dataset_catalog(DEPLOYMENT_CONFIG_PATH),
+        DatasetCatalog(),
         object_store_aliases=frozenset(plan.object_specs),
         config_path=DEPLOYMENT_CONFIG_PATH,
+        project_root=PROJECT_ROOT,
+        storage_plan=plan,
     )
     snapshot = plan.to_json()
     reconstructed = type(plan).from_json(snapshot)
@@ -67,7 +69,7 @@ def main() -> None:
 
     source = data_plan.inputs.get("training")
     source_mapping = source.to_mapping() if source is not None else {}
-    object_spec = wire_plan["object_specs"].get(source_mapping.get("store"), {})
+    object_spec = wire_plan["mounts"].get(source_mapping.get("store"), {})
     object_type = object_spec.get("type")
     scheme = {"gcs": "gs", "s3": "s3"}.get(object_type)
     if source_mapping.get("type") == "object" and scheme is not None:
@@ -79,7 +81,7 @@ def main() -> None:
             f"{scheme}://{object_spec['bucket']}/{qualified_key}"
         )
 
-    print("\nResolved logical dataset inputs:")
+    print("\nResolved logical input roles:")
     print(json.dumps(data_plan.to_mapping()["dataset_names"], indent=2, sort_keys=True))
 
     print("\nStorage-related environment names eligible for worker propagation:")

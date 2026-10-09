@@ -48,37 +48,38 @@ storage:
     # db: 0
     # connection_timeout: 5.0
 
-  object_stores:
-    # Define object storage to use as cache, datasets, etc
-    cache_storage:
+  # Mount sources resolve relative to this deployment file.
+  mounts:
+    local:
+      type: local
+      source: ..
+      access: staged
+    input:
       type: gcs
       bucket: expops-example-credit-card-fraud
+      prefix: credit-card-fraud/dataset
       gcp_project: exp-ops-506607
-
-    # Dataset bytes are independent from cache/artifact bytes. This S3 store is
-    # retained to demonstrate that a deployment may define another provider.
-    dataset_1:
-      type: s3
-      bucket: expops-test-bucket-755933694771-ap-southeast-1-an
-      region: ap-southeast-1
-      profile: expops
-
-    # The active training dataset is currently read from this GCS store.
-    dataset_2:
+      # S3 input alternative: replace this mount with the following provider.
+      # type: s3
+      # bucket: expops-test-bucket-755933694771-ap-southeast-1-an
+      # prefix: credit-card-fraud
+      # region: ap-southeast-1
+      # profile: expops
+    cache:
       type: gcs
       bucket: expops-example-credit-card-fraud
+      prefix: credit-card-fraud/vfs/cache
       gcp_project: exp-ops-506607
-
-  # Select the object store used for cache and artifact bytes.
-  cache:
-    object_store: cache_storage
-    ttl_hours: 24
-
-datasets:
-  credit_card_transactions:
-    type: object
-    # store: dataset_1
-    store: dataset_2
-    # Store keys are relative to ExpOps' project prefix, so this resolves to
-    # gs://expops-example-credit-card-fraud/credit-card-fraud/dataset/creditcard.csv.
-    key: dataset/creditcard.csv
+      policy:
+        ttl_hours: 24
+    artefact:
+      type: gcs
+      bucket: expops-example-credit-card-fraud
+      prefix: credit-card-fraud/vfs/artefact
+      gcp_project: exp-ops-506607
+      # S3 artefact alternative: replace this mount with the following provider.
+      # type: s3
+      # bucket: expops-test-bucket-755933694771-ap-southeast-1-an
+      # prefix: credit-card-fraud/vfs/artefact
+      # region: ap-southeast-1
+      # profile: expops
