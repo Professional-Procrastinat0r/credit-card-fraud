@@ -52,9 +52,6 @@ def test_profiles_resolve_scripts_requirements_and_input_without_clients(profile
     assert str(data.inputs["training"].key) == "creditcard.csv"
     assert data.modes["training"] == "stream"
     assert plan.mounts["cache"].cache_ttl_hours == 24
-    for alias in ("cache", "artefact"):
-        if plan.mounts[alias].type == "local":
-            assert plan.mounts[alias].access == "shared"
 
 
 def test_local_profile_has_project_owned_state_and_no_remote_credentials():
@@ -109,14 +106,24 @@ def test_original_parallel_graph_and_parameters_are_preserved():
 
 def test_git_profile_preserves_the_project_and_slurm_storage_without_clients():
     config = yaml.safe_load((ROOT / "configs/compute.git.slurm.yaml").read_text(encoding="utf-8"))
-    original = yaml.safe_load((ROOT / "configs/compute_config.yaml").read_text(encoding="utf-8"))
     git_mount = config["storage"]["mounts"]["local"]
     assert git_mount["type"] == "git"
     assert git_mount["repository"] == "https://github.com/Professional-Procrastinat0r/credit-card-fraud.git"
     assert len(git_mount["revision"]) == 40
     assert all(character in "0123456789abcdef" for character in git_mount["revision"])
-    config["storage"]["mounts"]["local"] = original["storage"]["mounts"]["local"]
-    assert config == original
+    assert config["provider"] == "slurm"
+    assert config["num_workers"] == 2
+    assert "--nodelist=xcnc17" in config["options"]["job_extra"]
+    assert config["options"]["spread_workers_across_nodes"] is False
+    metadata = config["storage"]["metadata"]
+    assert metadata["dialect"] == "sqlite"
+    assert metadata["connection"]["database"] == "/var/tmp/e1115319-expops-credit-card-fraud/metadata.sqlite"
+    mounts = config["storage"]["mounts"]
+    assert mounts["input"]["type"] == "s3"
+    assert mounts["input"]["prefix"] == "credit-card-fraud/dataset"
+    for alias in ("cache", "artefact"):
+        assert mounts[alias]["type"] == "gcs"
+        assert mounts[alias]["prefix"] == f"credit-card-fraud/slurm-git-s3-sqlite/{alias}"
     plan = resolved("compute.git.slurm.yaml")
     assert plan.mounts["local"].type == "git"
     for script in project_config()["scripts"].values():

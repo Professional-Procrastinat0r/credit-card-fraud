@@ -53,7 +53,6 @@ storage:
     local:
       type: local
       source: ..
-      access: staged
     input:
       type: gcs
       bucket: expops-example-credit-card-fraud

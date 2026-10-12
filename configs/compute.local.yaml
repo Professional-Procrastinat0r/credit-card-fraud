@@ -15,18 +15,14 @@ storage:
     local:
       type: local
       source: ..
-      access: staged
     input:
       type: local
       source: ../data
-      access: staged
     cache:
       type: local
       source: ../.credit-card-fraud/storage/cache
-      access: shared
       policy:
         ttl_hours: 24
     artefact:
       type: local
       source: ../.credit-card-fraud/storage/artefact
-      access: shared
