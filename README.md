@@ -1,372 +1,146 @@
 # Credit Card Fraud Detection with ExpOps
 
-This project uses ExpOps to train class-weighted logistic-regression fraud detectors across several split seeds and evaluate each model's held-out predictions with data parallelism. Earlier baseline, seed-only, and data-only results remain documented below as controls.
+Run the same fraud experiment locally or on SLURM with the ordinary ExpOps CLI.
+The project trains three logistic-regression models with split seeds 41, 42 and
+43, scores each held-out set in three partitions, and produces an aggregated
+metrics report. The expanded pipeline has 25 processes.
 
-## Experiment contract
+## Run on SLURM: Git source, S3 dataset, GCS outputs
 
-- Target: `Class`, where `1` means fraud and `0` means genuine.
-- Features: `Time`, `Amount`, and PCA components `V1` through `V28`.
-- Split: stratified 80/20 holdout split, repeated with seeds `41`, `42`, and `43`.
-- Preprocessing: `StandardScaler`, fitted only on the training partition.
-- Model: `LogisticRegression(class_weight="balanced", max_iter=1000)`.
-- Primary metric: held-out average precision.
-- Secondary metrics: ROC-AUC, precision, recall, F1, confusion counts, and alert rate.
-- Initial decision threshold: `0.5`.
+Follow [the end-to-end SLURM guide](slurm.md). It covers connecting, allocating
+the driver, activating ExpOps, loading credentials, setting writable temporary
+paths, and downloading the compute config. Once those steps are complete, run:
 
-The threshold is an initial operating point, not a tuned production threshold. Threshold selection must use a validation partition rather than the final test partition.
-
-## Active seed + data-parallel pipeline
-
-```text
-validate_data
-      |
-      v
-seed_parallel [41, 42, 43]
-      |
-      +-- S41: train -> prepare -> data_parallel -> P1/P2/P3 -> exact aggregate --+
-      +-- S42: train -> prepare -> data_parallel -> P1/P2/P3 -> exact aggregate --+
-      +-- S43: train -> prepare -> data_parallel -> P1/P2/P3 -> exact aggregate --+
-                                                                                |
-                                                                                v
-                                                               aggregate_seed_data_metrics
-                                                                                |
-                                                                                v
-                                                               plot_seed_data_parallel_metrics
+```bash
+expops run --project local --compute compute.git.slurm.yaml
 ```
 
-- `validate_data` checks the dataset schema, types, missing values, finite values, labels, and class distribution.
-- `seed_parallel` creates three outer branches and supplies seeds `41`, `42`, and `43`.
-- Each `train_model` branch creates its seed-specific stratified split and fits one scaler-and-classifier pipeline on the complete training portion.
-- Each `prepare_evaluation_data` reconstructs the matching held-out set and packages its features and labels as `evaluation_rows`.
-- Each seed-specific `data_parallel` node divides those held-out rows into three partitions, producing nine scoring branches in total.
-- `evaluate_partition` uses its seed's model to score one partition and returns local diagnostics plus row-level labels and fraud scores.
-- `aggregate_partition_metrics` has `data_aggregation: true`, so ExpOps creates one exact data aggregator per seed. It concatenates that seed's three partitions and recomputes global metrics.
-- `aggregate_seed_data_metrics` has `seed_aggregation: true`, so it collapses the remaining three seed branches and calculates cross-seed stability.
-- `plot_seed_data_parallel_metrics` creates `fraud_seed_data_parallel_report.png`.
+You only download the compute file. ExpOps retrieves the project from Git,
+reads `configs/project_config.yaml`, prepares its model and reporting Python
+environments, and submits the Dask worker jobs. The dataset already lives in
+S3; process results and reports go to GCS. SQLite stores metadata on `xcnc17`.
+No project checkout, dataset upload, or project-specific launch script is needed.
 
-The parallel boundary is deliberately after training. Training independent logistic-regression models on row shards would change the statistical procedure and require an explicit model-aggregation or ensemble strategy. Parallel held-out scoring preserves the baseline model and can therefore be checked directly against the control result.
+The guide has a separate **development-only** section for uploading and installing
+the platform source. That is installation/update work, not a step for every run.
 
-Average precision and ROC-AUC are not averaged across partitions. They are nonlinear ranking metrics, so the aggregator reconstructs the global label/score vectors and computes each metric once. Confusion-matrix metrics are also recomputed from the combined predictions.
+## Run locally on Windows
 
-The expanded pipeline contains 25 nodes: three training nodes, three held-out preparation nodes, three data splitters, nine partition evaluators, three exact data aggregators, one seed aggregator, and the shared validation, seed-split, and chart nodes.
-
-The configurations are:
-
-- `configs/project_config.yaml`: active nested seed + data experiment. It maps
-  the logical `training` input to a named dataset without owning its location.
-- `configs/compute_config.yaml`: deployment settings: SQL metadata, named GCS
-  and S3 object stores, GCS cache/artifacts, and the GCS-backed named training
-  dataset.
-
-The active SQL + GCS configuration requires an `expops-platform`
-checkout containing named dataset materialization, `ResolvedDataPlan`,
-`ResolvedStoragePlan`, and plugin-owned authentication.
-
-## Storage authentication example
-
-The active configuration demonstrates two authentication strategies owned by
-the selected storage plugins:
-
-- PostgreSQL uses an explicit `EnvironmentSecretRef` named
-  `CREDIT_CARD_FRAUD_SQL_PASSWORD`. The variable name is part of the safe
-  storage specification; its value is not.
-- GCS delegates authentication to Google Application Default Credentials, so
-  ExpOps does not define or serialize a provider-specific key structure. The
-  additional S3 store demonstrates a second plugin-owned strategy: Boto3's
-  standard provider chain using the non-secret `expops` profile.
-
-Inspect what ExpOps may serialize and send to workers without connecting to
-either backend:
+Prerequisites: a VFS-capable ExpOps installation and the full dataset saved as
+`data/creditcard.csv`. From PowerShell in this repository, activate your ExpOps
+environment. For a sibling development checkout:
 
 ```powershell
-cd D:\NUS\FYP\credit-card-fraud
-$env:PYTHONPATH = "D:\NUS\FYP\expops-platform\src"
-& "..\expops-platform\.venv\Scripts\python.exe" scripts\inspect_storage_auth.py
+& ..\expops-platform\.venv\Scripts\Activate.ps1
+
+$env:MLOPS_WORKSPACE_BASE_DIR = Join-Path $PWD '.credit-card-fraud\workspaces'
+New-Item -ItemType Directory -Force $env:MLOPS_WORKSPACE_BASE_DIR | Out-Null
+
+expops run --compute configs/compute.local.yaml
 ```
 
-The credential portion of the printed metadata spec contains only this
-reference:
+The writable workspace avoids the platform's `/tmp` default on Windows.
+ExpOps discovers the project from the current directory, which contains
+`configs/project_config.yaml`. It creates the required project environments;
+you do not install the model or plotting requirements manually. The local
+profile uses two local Dask workers, SQLite, and local input/cache/report mounts,
+so no cloud credentials are needed.
 
-```json
-{
-  "password_ref": {
-    "name": "CREDIT_CARD_FRAUD_SQL_PASSWORD",
-    "required": true,
-    "source": "environment"
-  }
-}
+Repeat the same command to test caching. With an empty metadata database and
+cache, expect 25 executed processes and zero failures. An unchanged repeat with
+valid cache entries should report 25 cached processes and zero failures. The CLI
+prints the run ID, summary, and log path. Check that it exits successfully.
+
+## Choose a deployment
+
+| Config | Compute | Metadata | Files |
+| --- | --- | --- | --- |
+| `configs/compute.local.yaml` | Two local Dask workers | Project-local SQLite | Local source, input, cache and artefacts |
+| `configs/compute.cloud.yaml` | Two local Dask workers | PostgreSQL | Local source, S3 input, GCS cache and artefacts |
+| `configs/compute_config.yaml` | Two SLURM workers | PostgreSQL | Local source, GCS input, cache and artefacts |
+| `configs/compute.git.slurm.yaml` | Two SLURM workers on `xcnc17` | Node-local SQLite | Git source, S3 input, GCS cache and artefacts |
+
+For local workers with cloud storage, provision the credentials and PostgreSQL
+connection referenced by `compute.cloud.yaml`, then run from this repository:
+
+```powershell
+expops run --compute configs/compute.cloud.yaml
 ```
 
-The actual value is resolved only when the SQL plugin constructs its client in
-the driver or worker process. The script deliberately supplies an empty
-environment and does not open a storage client, so it works without credentials
-or network access.
+Keep the writable workspace setting from the local example. Omitting `--compute`
+selects `configs/compute_config.yaml`, which is a SLURM/PostgreSQL profile. Use an
+explicit compute config for these examples. There is no `run --config` argument.
+All deployments use the same project definition in `configs/project_config.yaml`.
 
-To use a mounted secret instead, the SQL plugin can be configured with a file
-reference such as the following. The deployment—not ExpOps task payloads—must
-mount the same path wherever the client is constructed:
+## Mounted source and streaming input
 
-```yaml
-password_ref:
-  source: file
-  path: /run/secrets/expops/sql-password
-  required: true
-```
+`--project local` in the Git example selects the mount containing the project
+configuration. `local` is a mount alias; this deployment maps it to Git. The
+source revision is pinned to `8e76706f5394483d82126dbab671e4ec92639cf3`, independently
+of the branch supplying the compute file. After merging deployment/docs changes,
+the compute-file URL can use `main` without changing that source pin.
 
-## Dataset
+Scripts and environment requirements are addressed as `local/src/model.py`,
+`local/src/plot_metrics.py`, `local/requirements.txt`, and
+`local/requirements-charts.txt`. Each compute file defines the actual providers.
+Local mount `source` paths resolve relative to the compute YAML file.
 
-The active configuration reads the training dataset from:
-
-```text
-gs://expops-example-credit-card-fraud/credit-card-fraud/dataset/creditcard.csv
-```
-
-The deployment catalogue gives the physical dataset a stable name:
-
-```yaml
-storage:
-  object_stores:
-    dataset_2:
-      type: gcs
-      bucket: expops-example-credit-card-fraud
-      gcp_project: exp-ops-506607
-
-datasets:
-  credit_card_transactions:
-    type: object
-    store: dataset_2
-    # Relative to the resolved project prefix shown below.
-    key: dataset/creditcard.csv
-```
-
-The project configuration maps the role expected by model code to that name:
+The project declares its training input as:
 
 ```yaml
 data:
   inputs:
     training:
-      dataset: credit_card_transactions
+      path: input/creditcard.csv
+      mode: stream
 ```
 
-For this project, the resolved GCS storage spec contributes the
-`credit-card-fraud` prefix and the dataset contributes
-`dataset/creditcard.csv`. Together they address the bucket key
-`credit-card-fraud/dataset/creditcard.csv`; the project prefix must not be
-repeated in the data source.
+Validation, training and held-out preparation open `context.inputs["training"]`
+on the worker and pass the stream to `pandas.read_csv`. The raw CSV is not saved
+as a materialized dataset. Pandas still loads the CSV into memory; each process
+that needs it opens a fresh stream. This is not incremental training.
 
-ExpOps downloads the object into a run-scoped path on each execution worker.
-The model reads that local path from `context.data_paths["training"]` and uses
-`pandas.read_csv`; it does not contain GCS or provider-SDK code. Process results pass
-the logical source name rather than a temporary absolute path, so subsequent
-tasks can resolve their own worker-local copy. ExpOps hashes the materialized
-bytes for cache correctness; there is no checksum field in either YAML file.
+For a materialized input, change the mode to `materialize` or omit it. The loader
+supports both modes; its commented materialized example remains in the source.
+Input content identity supports caching in either mode. Changes to input bytes,
+process code or parameters can invalidate dependent results.
 
-To switch to a local file, change only the named dataset definition in
-`compute_config.yaml` to `type: local` with `path: data/creditcard.csv`; every
-project configuration continues to reference `credit_card_transactions`.
+The reserved `cache` and `artefact` mounts store process results and reports.
+Cache entries in these profiles have a 24-hour TTL, so a later repeat can execute
+again after expiry. SQLite holds metadata and cache indices; GCS holds output
+bytes in the Git/SLURM deployment. Retain both to reuse cached results.
 
-Expected dataset properties:
+## Files created by a run
 
-```text
-Rows:             284,807
-Columns:          31
-Genuine records:  284,315
-Fraud records:    492
-Fraud prevalence: 0.1727%
-```
+| Location | Purpose |
+| --- | --- |
+| `.credit-card-fraud/` in a native checkout | Project environments, requirement snapshots and logs |
+| `.credit-card-fraud/storage/` with the local profile | SQLite metadata, cached results and artefacts |
+| `.expops-sources/credit-card-fraud/` with the Git profile | Retrieved project source, including its `.credit-card-fraud/` runtime directory |
+| Configured workspace directory | Temporary process workspaces |
+| GCS `credit-card-fraud/slurm-git-s3-sqlite/cache` and `/artefact` | Managed cache payloads and report objects for the Git/SLURM profile |
 
-The raw dataset and `.credit-card-fraud/` runtime directory are intentionally excluded from Git.
+The chart is `fraud_seed_data_parallel_report.png`. Use the run's chart metadata
+to find its managed object reference; object keys include ExpOps-managed paths.
+The raw dataset and generated runtime state are excluded from Git.
 
-## Run locally
+## Experiment and correctness controls
 
-From the workspace containing both `credit-card-fraud/` and `expops-platform/`:
+- Target: `Class`; 1 is fraud, 0 is genuine.
+- Features: `Time`, `Amount`, and `V1` through `V28`.
+- Split: stratified 80/20 holdout, with seeds 41, 42 and 43.
+- Preprocessing: `StandardScaler` fitted only on the training split.
+- Model: `LogisticRegression(class_weight="balanced", max_iter=1000)`.
+- Primary metric: held-out average precision; secondary metrics include ROC-AUC,
+  precision, recall, F1, confusion counts, and alert rate at threshold 0.5.
 
-```powershell
-cd D:\NUS\FYP
-$env:MLOPS_WORKSPACE_DIR = "D:\NUS\FYP"
-$env:CREDIT_CARD_FRAUD_SQL_PASSWORD = Read-Host "PostgreSQL password" -MaskInput
-try {
-    & ".\expops-platform\.venv\Scripts\expops.exe" run credit-card-fraud --local
-} finally {
-    Remove-Item Env:CREDIT_CARD_FRAUD_SQL_PASSWORD -ErrorAction SilentlyContinue
-}
-```
+The full dataset contains 284,807 rows, 31 columns and 492 frauds. Training uses
+each seed's complete training split; only held-out scoring is partitioned.
+Each seed's three partitions are concatenated before computing global metrics.
+Average precision and ROC-AUC are not averaged across partitions. The final
+seed aggregator reports cross-seed stability.
 
-With the current Windows checkout, existing environments can be run without package-index access and with an explicit writable worker directory:
-
-```powershell
-$runtimeTemp = "D:\NUS\FYP\credit-card-fraud\.credit-card-fraud\tmp"
-$env:MLOPS_WORKSPACE_DIR = "D:\NUS\FYP"
-$env:MLOPS_WORKSPACE_BASE_DIR = $runtimeTemp
-$env:MLOPS_ENV_READY = "1"
-$env:PIP_NO_INDEX = "1"
-$env:PYTHONPATH = "D:\NUS\FYP\expops-platform\src"
-$env:CREDIT_CARD_FRAUD_SQL_PASSWORD = Read-Host "PostgreSQL password" -MaskInput
-
-try {
-    & ".\credit-card-fraud\.credit-card-fraud\envs\fraud-model-env\Scripts\python.exe" `
-        -m expops.main run credit-card-fraud --local
-} finally {
-    Remove-Item Env:CREDIT_CARD_FRAUD_SQL_PASSWORD -ErrorAction SilentlyContinue
-}
-```
-
-This workaround assumes the pinned model and reporting environments have already been created.
-
-The commands above match the active PostgreSQL metadata and GCS cache, artifact,
-and dataset configuration. The SQL plugin resolves
-`CREDIT_CARD_FRAUD_SQL_PASSWORD`, and GCS requires Google Application Default
-Credentials. Because the deployment also declares the S3 example store, the
-`expops` AWS profile and the platform's AWS optional dependency must remain
-available until that unused store is removed from the configuration.
-
-ExpOps stores environments, logs, metrics, caches, model spill files, and chart artifacts under:
-
-```text
-credit-card-fraud/.credit-card-fraud/
-```
-
-## Baseline result
-
-Successful evaluation run:
-
-```text
-Run ID:                  project-credit-card-fraud-20260824052859-e26c7041
-Test transactions:       56,962
-Test frauds:              98
-Average precision:        0.718971
-ROC-AUC:                  0.972083
-Precision at 0.5:         0.060976
-Recall at 0.5:            0.918367
-F1 at 0.5:                0.114358
-False positives:          1,386
-False negatives:          8
-Alert rate:               2.5912%
-```
-
-The model catches 90 of 98 frauds at threshold `0.5`, but only about 6.1% of alerts are genuine fraud. This illustrates why threshold selection must incorporate operational costs.
-
-The seed-42 branch should reproduce this control result because it uses the same split and model parameters. Seeds 41 and 43 show whether the conclusion is stable under nearby alternative holdout samples.
-
-## Seed-parallel result
-
-Successful seed-sensitivity run:
-
-```text
-Run ID: project-credit-card-fraud-20260824182212-eaf57918
-```
-
-| Seed | Average precision | ROC-AUC | Precision | Recall | F1 | Alert rate |
-| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 41 | 0.699598 | 0.973703 | 0.060440 | 0.897959 | 0.113256 | 2.5561% |
-| 42 | 0.718971 | 0.972083 | 0.060976 | 0.918367 | 0.114358 | 2.5912% |
-| 43 | 0.730829 | 0.986894 | 0.061794 | 0.948980 | 0.116032 | 2.6421% |
-| Mean | 0.716466 | 0.977560 | 0.061070 | 0.921769 | 0.114549 | 2.5965% |
-| Population std. | 0.012872 | 0.006633 | 0.000557 | 0.020967 | 0.001141 | 0.0353 pp |
-
-Average precision changes noticeably across the three holdout samples, while precision, F1, and alert rate remain comparatively stable. Recall ranges from about 89.8% to 94.9%. The broad operational conclusion is therefore stable—threshold `0.5` catches most frauds but produces many false alerts—although a single split understates uncertainty in recall and ranking quality.
-
-The generated report is stored as `fraud_seed_report.png` under the run's ExpOps artifact directory.
-
-## Data-parallel result
-
-Successful three-partition evaluation run:
-
-```text
-Run ID: project-credit-card-fraud-20260824183907-91e23e52
-```
-
-| Partition | Test rows | Frauds | Local average precision | Local ROC-AUC | Alert rate |
-| ---: | ---: | ---: | ---: | ---: | ---: |
-| P1 | 18,988 | 25 | 0.782138 | 0.984244 | 2.4542% |
-| P2 | 18,987 | 30 | 0.676164 | 0.935143 | 2.5860% |
-| P3 | 18,987 | 43 | 0.725961 | 0.990722 | 2.7334% |
-
-The exactly aggregated result is:
-
-```text
-Test transactions:       56,962
-Test frauds:                  98
-Average precision:      0.718971
-ROC-AUC:                0.972083
-Precision at 0.5:       0.060976
-Recall at 0.5:          0.918367
-F1 at 0.5:              0.114358
-True negatives:           55,478
-False positives:           1,386
-False negatives:               8
-True positives:               90
-Alert rate:               2.5912%
-```
-
-These global values match the seed-42 baseline exactly. That is the main correctness check: splitting scoring work changed how the rows were processed, but not the resulting predictions or metrics. The different local average-precision values describe each shard only and should not be interpreted as three independent model runs.
-
-The generated report is stored as `fraud_data_parallel_report.png` under the run's ExpOps artifact directory.
-
-## Combined seed + data-parallel result
-
-Successful nested run:
-
-```text
-Run ID: project-credit-card-fraud-20260824184934-b9a925fa
-Expanded process nodes: 25
-Seed branches:           3
-Partitions per seed:     3
-Scoring branches:        9
-```
-
-Each seed's three partitions contained 56,962 transactions and 98 frauds in total:
-
-| Seed | P1 frauds | P2 frauds | P3 frauds | Total frauds |
-| ---: | ---: | ---: | ---: | ---: |
-| 41 | 34 | 21 | 43 | 98 |
-| 42 | 25 | 30 | 43 | 98 |
-| 43 | 37 | 29 | 32 | 98 |
-
-After exact within-seed aggregation:
-
-| Seed | Average precision | ROC-AUC | Precision | Recall | F1 | Alert rate |
-| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 41 | 0.699598 | 0.973703 | 0.060440 | 0.897959 | 0.113256 | 2.5561% |
-| 42 | 0.718971 | 0.972083 | 0.060976 | 0.918367 | 0.114358 | 2.5912% |
-| 43 | 0.730829 | 0.986894 | 0.061794 | 0.948980 | 0.116032 | 2.6421% |
-| Mean | 0.716466 | 0.977560 | 0.061070 | 0.921769 | 0.114549 | 2.5965% |
-
-Every per-seed metric matches the earlier seed-only experiment. This verifies both aggregation boundaries: data aggregation reconstructs the original held-out result for each seed, and seed aggregation reproduces the earlier cross-seed summary. Local partition metrics vary because each shard contains a different subset of transactions; they are diagnostics, not independent experiments.
-
-The generated report is stored as `fraud_seed_data_parallel_report.png` under the run's ExpOps artifact directory.
-
-## Known ExpOps issues exposed by this run
-
-- On this Windows checkout, the default process workspace `/tmp` resolved to an inaccessible `D:\tmp`; `MLOPS_WORKSPACE_BASE_DIR` was required.
-- The seed aggregator received ordinal keys (`seed1`, `seed2`, `seed3`) even though the expanded process IDs used seeds `41`, `42`, and `43`. Evaluation outputs therefore carry `random_seed` explicitly, and the aggregator treats that value as authoritative.
-- Cache-manifest filenames for seed-parallel nodes contain canonical XPath characters and exceed or violate Windows path rules. The run completed by returning full payloads, but the affected training, evaluation, and aggregation nodes were not persisted as reusable manifests.
-- A partitioned pandas `DataFrame` was spilled and restored by ExpOps as a two-dimensional NumPy array, so its column labels were lost at the parallel boundary. `evaluate_partition` validates the array width and reconstructs the known dataset columns before scoring.
-- The same Windows cache-path limitation affects some data-parallel and aggregation manifests. Full-payload fallback allowed the pipeline to finish correctly, but cache reuse is incomplete for the affected nodes.
-
-## Reproducibility snapshot
-
-The successful baseline used:
-
-```text
-Python:          3.14.3
-NumPy:           2.5.2
-pandas:          3.0.5
-scikit-learn:    1.9.0
-joblib:          1.5.3
-Matplotlib:      3.11.1
-```
-
-The direct dependencies are pinned in `requirements.txt` and `requirements-charts.txt`. Transitive dependencies are not yet represented by a lockfile.
-
-ExpOps is installed from the editable local checkout at `../expops-platform`. Its observed base commit at this checkpoint was:
-
-```text
-a3e6107d8182b928a116098931af66e3df110208
-```
-
-The checkout was not clean at the checkpoint, so the commit hash alone is not a complete byte-for-byte platform snapshot. Commit or otherwise record the local ExpOps changes before presenting the experiment as exactly reproducible.
-
-## Next experiment
-
-The next useful step is performance scaling rather than another statistical variant: repeat the same nested graph with different worker counts and partition counts, then compare wall-clock time, scheduling overhead, and memory use. Before treating those timings as representative, the Windows cache-path and DataFrame-serialization issues should be isolated as platform fixes because failed manifest reuse can distort repeated-run performance.
+Threshold 0.5 is an initial operating point. Threshold tuning needs a validation
+partition rather than the final test set. See [historical experiment results](docs/experiment-results.md)
+for the original baseline and parallelism controls; those records are historical,
+not fresh measurements of the current deployment.

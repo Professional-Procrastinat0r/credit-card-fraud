@@ -1,0 +1,69 @@
+# Standalone Git bootstrap: no local credit-card-fraud checkout is required.
+# expops run --project local --compute compute.git.slurm.yaml
+# Pin the project source independently of subsequent deployment/docs changes.
+provider: slurm
+
+# Start conservatively for the first cluster run. The active pipeline expands
+# to nine scoring branches, which Dask will process in waves across two workers.
+num_workers: 2
+
+options:
+  queue: "normal"
+  worker_cores: 1
+  worker_memory: "4GB"
+  worker_processes: 1
+  walltime: "00:30:00"
+  startup_timeout_sec: 600
+
+  # Values reported by sacctmgr on xlogin2.
+  job_extra:
+    - "--account=allusers"
+    - "--qos=normal"
+    - "--nodelist=xcnc17"
+
+  # SQLite WAL requires the driver and all workers on the same physical host.
+  # Run the driver in an allocation on this same node.
+  spread_workers_across_nodes: false
+
+# Deployment resources live in one file, but ExpOps parses compute and storage
+# into independent plans with independent ownership and lifecycles.
+storage:
+  metadata:
+    type: sql
+    dialect: sqlite
+    busy_timeout_ms: 30000
+    connection:
+      # Stable node-local database shared by the driver and workers on xcnc17.
+      # Choose a directory owned by your cluster account when adapting this file.
+      database: /var/tmp/e1115319-expops-credit-card-fraud/metadata.sqlite
+
+  # Keep the project's local/... paths while obtaining their files from Git.
+  mounts:
+    local:
+      type: git
+      repository: https://github.com/Professional-Procrastinat0r/credit-card-fraud.git
+      revision: 8e76706f5394483d82126dbab671e4ec92639cf3
+    input:
+      type: s3
+      bucket: expops-test-bucket-755933694771-ap-southeast-1-an
+      prefix: credit-card-fraud/dataset
+      region: ap-southeast-1
+      profile: expops
+    cache:
+      type: gcs
+      bucket: expops-example-credit-card-fraud
+      prefix: credit-card-fraud/slurm-git-s3-sqlite/cache
+      gcp_project: exp-ops-506607
+      policy:
+        ttl_hours: 24
+    artefact:
+      type: gcs
+      bucket: expops-example-credit-card-fraud
+      prefix: credit-card-fraud/slurm-git-s3-sqlite/artefact
+      gcp_project: exp-ops-506607
+      # S3 artefact alternative: replace this mount with the following provider.
+      # type: s3
+      # bucket: expops-test-bucket-755933694771-ap-southeast-1-an
+      # prefix: credit-card-fraud/vfs/artefact
+      # region: ap-southeast-1
+      # profile: expops

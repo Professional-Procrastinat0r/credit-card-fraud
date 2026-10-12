@@ -1,382 +1,225 @@
-# Slurm deployment
+# Run credit-card-fraud on SLURM
 
-This deployment bundles the project and platform code. The training dataset is
-materialized from GCS by ExpOps on each execution worker. The cluster's `/tmp`
-filesystem has a small per-user quota, so pip temporary files, ExpOps process
-workspaces, and materialized data are redirected to persistent storage under
-`~/fyp-expops`.
+This workflow uses Git source, the full S3 dataset, GCS cache and artefacts, and
+SQLite metadata. Download one compute config and run the ordinary ExpOps CLI.
+ExpOps retrieves the project, prepares its environments and submits two Dask
+worker jobs. No project-specific launch or inspection scripts are required.
 
-The active `configs/compute_config.yaml` uses PostgreSQL metadata, GCS for cache,
-artifacts, and the training dataset, and also declares an S3 object store to
-demonstrate multiple providers. The same project can use Redis metadata by
-activating the commented block. The login node and every allocated worker
-therefore need outbound access to the selected metadata and object stores.
-`~/fyp-expops` must still be a shared filesystem so workers see the extracted
-source, environments, and configured temporary roots.
+The commands below target the existing NUS account `e1115319` and node `xcnc17`.
+ExpOps is installed at `~/fyp-expops/expops-platform`, and credentials are already
+configured. A different account must adapt the compute file's node, account,
+SQLite path, buckets and AWS profile, and provision its own credentials once.
 
-Credential values are not stored in YAML or bundled in the archive. The SQL
-plugin reads the active PostgreSQL password from the deployment-selected
-`CREDIT_CARD_FRAUD_SQL_PASSWORD` environment reference. The GCS plugin uses
-Google Application Default Credentials, while the additional S3 plugin
-delegates AWS authentication to Boto3's standard credential chain. The
-commented Redis alternative selects a separate environment reference.
+## 1. Connect and allocate the driver
 
-Before building the archive, use an `expops-platform` checkout containing data
-source materialization, resolved storage plans, plugin-owned authentication,
-and the SQL, GCS, and S3 storage implementations. The required-file checks below
-reject an older platform checkout before it can be uploaded.
-
-## 1. Build the code archive locally (PowerShell)
-
-Run this from the Windows checkout. The archive contains `credit-card-fraud/`
-and `expops-platform/`, but excludes the remotely hosted dataset, environments,
-runtime files, and frontend dependencies.
+In Windows PowerShell:
 
 ```powershell
-Set-Location "D:\NUS\FYP"
-
-$archive = "credit-card-fraud-slurm-deploy-$(Get-Date -Format yyyyMMdd-HHmmss).tar.gz"
-
-tar.exe -czf $archive '--exclude=.git' '--exclude=.venv' '--exclude=.pytest_cache' '--exclude=node_modules' '--exclude=.credit-card-fraud' '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=creditcard.csv' credit-card-fraud expops-platform
-
-if ($LASTEXITCODE -ne 0) {
-    throw "tar.exe failed; do not upload the partial archive"
-}
-
-$entries = @(tar.exe -tzf $archive)
-if ($LASTEXITCODE -ne 0) {
-    throw "The archive could not be read back"
-}
-
-$required = @(
-    'credit-card-fraud/configs/project_config.yaml'
-    'credit-card-fraud/configs/compute_config.yaml'
-    'credit-card-fraud/scripts/inspect_storage_auth.py'
-    'expops-platform/pyproject.toml'
-    'expops-platform/src/expops/storage/sql_config.py'
-    'expops-platform/src/expops/storage/adapters/gcs_object_store.py'
-    'expops-platform/src/expops/storage/adapters/s3_object_store.py'
-)
-$missing = @($required | Where-Object { $_ -notin $entries })
-if ($missing.Count -ne 0) {
-    throw "Archive is missing required files: $($missing -join ', ')"
-}
-
-$unexpected = @($entries | Where-Object {
-    $_ -match '(^|/)(\.git|\.venv|\.pytest_cache|node_modules|\.credit-card-fraud|__pycache__)(/|$)|(^|/)creditcard\.csv$|\.pyc$'
-})
-if ($unexpected.Count -ne 0) {
-    throw "Archive contains excluded files: $($unexpected[0..([Math]::Min(9, $unexpected.Count - 1))] -join ', ')"
-}
-
-Get-Item -LiteralPath $archive | Select-Object FullName, Length, LastWriteTime
+ssh -J e1115319@stujump.comp.nus.edu.sg e1115319@xlogin.comp.nus.edu.sg
 ```
 
-Upload the code archive under a stable remote filename:
-
-```powershell
-scp -o 'ProxyJump=e1115319@stujump.comp.nus.edu.sg' $archive 'e1115319@xlogin.comp.nus.edu.sg:~/credit-card-fraud-slurm-deploy.tar.gz'
-
-if ($LASTEXITCODE -ne 0) {
-    throw "scp failed; the remote bundle was not accepted"
-}
-```
-
-## 2. Extract the bundle on the Slurm cluster (Bash)
+On the login node, obtain a compute-node shell:
 
 ```bash
-mkdir -p "$HOME/fyp-expops"
-
-tar -xzf "$HOME/credit-card-fraud-slurm-deploy.tar.gz" \
-  -C "$HOME/fyp-expops"
-
-ls -la "$HOME/fyp-expops"
-
-test -f "$HOME/fyp-expops/credit-card-fraud/configs/project_config.yaml"
-test -f "$HOME/fyp-expops/credit-card-fraud/configs/compute_config.yaml"
-test -f "$HOME/fyp-expops/credit-card-fraud/scripts/inspect_storage_auth.py"
-test -f "$HOME/fyp-expops/expops-platform/pyproject.toml"
-test -f "$HOME/fyp-expops/expops-platform/src/expops/storage/sql_config.py"
-test -f "$HOME/fyp-expops/expops-platform/src/expops/storage/adapters/gcs_object_store.py"
-test -f "$HOME/fyp-expops/expops-platform/src/expops/storage/adapters/s3_object_store.py"
+salloc --partition=normal --account=allusers --qos=normal \
+  --nodes=1 --ntasks=1 --cpus-per-task=1 --mem=4G \
+  --time=01:00:00 --nodelist=xcnc17 srun --pty bash
+hostname
 ```
 
-Do not continue if extraction or any required-file check returns a nonzero exit
-status. The archive contains the current worktrees, including uncommitted source
-changes; that is useful for this smoke test but is not a reproducible release.
+Wait for the allocation; `hostname` should report `xcnc17`. This places the
+ExpOps driver on the same node as the workers specified in the compute config,
+so they can use the same node-local SQLite database. If you already have an
+interactive shell on that node, use it rather than requesting another allocation.
 
-## 3. Configure persistent temporary storage
+## 2. Activate ExpOps and load credentials
 
-Run the complete block after every new login, before creating a virtual
-environment, installing packages, or invoking ExpOps. `TMPDIR` protects Python
-and pip builds; `MLOPS_WORKSPACE_BASE_DIR` protects ExpOps process workspaces;
-`MLOPS_DATA_MATERIALIZATION_DIR` holds worker-local object inputs; the Dask and
-joblib variables keep their spill files off `/tmp` too.
+In that compute-node shell:
 
 ```bash
-cd "$HOME/fyp-expops"
-
-export TMPDIR="$HOME/fyp-expops/.tmp"
-export TMP="$TMPDIR"
-export TEMP="$TMPDIR"
-export JOBLIB_TEMP_FOLDER="$TMPDIR/joblib"
-
-export PIP_CACHE_DIR="$HOME/fyp-expops/.pip-cache"
-export XDG_CACHE_HOME="$HOME/fyp-expops/.cache"
-export DASK_TEMPORARY_DIRECTORY="$HOME/fyp-expops/.dask"
-
-export MLOPS_WORKSPACE_DIR="$HOME/fyp-expops"
-export MLOPS_WORKSPACE_BASE_DIR="$HOME/fyp-expops/.workspaces"
-export MLOPS_DATA_MATERIALIZATION_DIR="$HOME/fyp-expops/.materialized-data"
-export MLOPS_WORKSPACE_CLEANUP="always"
-export MLOPS_DASK_WAIT_FOR_WORKERS_SEC="120"
-
-mkdir -p \
-  "$TMPDIR" \
-  "$JOBLIB_TEMP_FOLDER" \
-  "$PIP_CACHE_DIR" \
-  "$XDG_CACHE_HOME" \
-  "$DASK_TEMPORARY_DIRECTORY" \
-  "$MLOPS_WORKSPACE_BASE_DIR" \
-  "$MLOPS_DATA_MATERIALIZATION_DIR"
-
-chmod 700 \
-  "$TMPDIR" \
-  "$JOBLIB_TEMP_FOLDER" \
-  "$PIP_CACHE_DIR" \
-  "$XDG_CACHE_HOME" \
-  "$DASK_TEMPORARY_DIRECTORY" \
-  "$MLOPS_WORKSPACE_BASE_DIR" \
-  "$MLOPS_DATA_MATERIALIZATION_DIR"
-
-quota -s
-python3 -c 'import tempfile; print(tempfile.gettempdir())'
-touch "$TMPDIR/.write-test"
-rm "$TMPDIR/.write-test"
-```
-
-The Python command must print a path under `~/fyp-expops`, not `/tmp`.
-
-## 4. Create and verify the Linux driver environment
-
-Run this immediately after Step 3 in the same login so the temporary-storage
-environment remains active.
-
-```bash
-cd "$HOME/fyp-expops"
-
-python3 -m venv .venv
-source .venv/bin/activate
-
-python -m pip install --no-cache-dir --upgrade pip setuptools wheel
-python -m pip install --no-cache-dir -e "./expops-platform[slurm,aws,gcp,postgres]"
-
-python -m pip check
-python -c 'import boto3, dask_jobqueue, expops, psycopg; from google.cloud import storage; from expops.cluster import ComputeSession; print(expops.__file__)'
+source "$HOME/fyp-expops/expops-platform/.venv/bin/activate"
+source "$HOME/.config/expops/cloud.env"
 command -v expops
 ```
 
-Those commands match the active PostgreSQL metadata and declared GCS and S3
-object stores. The commented Redis alternative can be installed and verified
-with:
+Activation makes the installed `expops` and `python` commands available in this
+shell. The existing credential file selects GCP application-default credentials
+and AWS profile `expops`; Git uses the configured credential helper. Activate and
+load these variables again in each new shell. Credentials stay outside the repo.
+
+## 3. Choose the run directory and writable temporary paths
 
 ```bash
-# python -m pip install --no-cache-dir -e "./expops-platform[slurm,aws,gcp,redis]"
-# python -c 'import boto3, dask_jobqueue, expops, redis; from google.cloud import storage; from expops.cluster import ComputeSession; print(expops.__file__)'
-```
+umask 077
+mkdir -p "$HOME/fyp-expops/git-s3-gcs-sqlite"
+cd "$HOME/fyp-expops/git-s3-gcs-sqlite"
 
-Optional extras can be combined to match any selected metadata/object-store
-pair.
+export TMPDIR="$PWD/tmp" TMP="$PWD/tmp" TEMP="$PWD/tmp"
+export MLOPS_WORKSPACE_BASE_DIR="$PWD/workspaces"
+export XDG_CACHE_HOME="$PWD/cache" PIP_CACHE_DIR="$PWD/pip-cache"
+export DASK_DISTRIBUTED__COMM__COMPRESSION=zlib
+export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1
+mkdir -p "$TMPDIR" "$MLOPS_WORKSPACE_BASE_DIR" "$XDG_CACHE_HOME" "$PIP_CACHE_DIR"
 
-Do not continue until `pip check` and the relevant imports succeed. ExpOps also
-installs the selected storage dependencies into the model and reporting
-environments it constructs, so they do not need to be added to the experiment's
-requirements files solely for backend reconstruction.
-
-## 5. Configure and verify remote storage credentials
-
-Run the PostgreSQL password prompt after each new login. Its name matches the
-explicit `password_ref` in `compute_config.yaml`. Input is hidden and the value
-is not written into shell history:
-
-```bash
-read -rsp "CREDIT_CARD_FRAUD_SQL_PASSWORD: " CREDIT_CARD_FRAUD_SQL_PASSWORD
-printf '\n'
-export CREDIT_CARD_FRAUD_SQL_PASSWORD
-
-test -n "${CREDIT_CARD_FRAUD_SQL_PASSWORD:-}"
-
-python -c 'import os, psycopg; c=psycopg.connect(host="aws-0-ap-southeast-1.pooler.supabase.com", port=6543, dbname="postgres", user="postgres.dzzzeqtjpdfknbggnotp", password=os.environ["CREDIT_CARD_FRAUD_SQL_PASSWORD"], sslmode="require", connect_timeout=5); c.execute("SELECT 1").fetchone(); print("PostgreSQL preflight: OK"); c.close()'
-```
-
-For the commented Redis alternative, use its independently selected environment
-reference:
-
-```bash
-# read -rsp "CREDIT_CARD_FRAUD_REDIS_PASSWORD: " CREDIT_CARD_FRAUD_REDIS_PASSWORD
-# printf '\n'
-# export CREDIT_CARD_FRAUD_REDIS_PASSWORD
-# test -n "${CREDIT_CARD_FRAUD_REDIS_PASSWORD:-}"
-# python -c 'import os, redis; c=redis.Redis(host="afterthought-cakes-button-30026.db.redis.io", port=17421, db=0, password=os.environ["CREDIT_CARD_FRAUD_REDIS_PASSWORD"], socket_connect_timeout=5); print("Redis preflight:", c.ping()); c.close()'
-```
-
-### Google Cloud Storage (active)
-
-For the active GCS backend, use Application Default Credentials that
-are readable at the same path on the login node and workers. If you must use a
-credential JSON file, keep it outside the project and upload it separately from
-the code archive. Run this locally in PowerShell. This uses one cluster
-connection instead of separate setup, upload, and verification connections:
-
-```powershell
-$gcpCredentials = 'C:\Users\User\AppData\Roaming\gcloud\application_default_credentials.json'
-$sshTarget = 'e1115319@xlogin.comp.nus.edu.sg'
-$proxyJump = 'e1115319@stujump.comp.nus.edu.sg'
-
-scp -o "ProxyJump=$proxyJump" $gcpCredentials "${sshTarget}:~/.expops-gcp-credentials-upload.json"
-if ($LASTEXITCODE -ne 0) {
-    throw "Google credentials upload failed"
-}
-```
-
-Then run this in the cluster login session you already use for setup and the
-pipeline. The move and permissions are needed only after uploading a new file;
-the two exports are needed after every new login:
-
-```bash
-mkdir -p "$HOME/.config/expops"
-mv "$HOME/.expops-gcp-credentials-upload.json" \
-  "$HOME/.config/expops/gcp-service-account.json"
-chmod 700 "$HOME/.config/expops"
-chmod 600 "$HOME/.config/expops/gcp-service-account.json"
-
-export GOOGLE_APPLICATION_CREDENTIALS="$HOME/.config/expops/gcp-service-account.json"
-export GOOGLE_CLOUD_PROJECT="exp-ops-506607"
-
-python -c 'from google.cloud import storage; c=storage.Client(); b=c.bucket("expops-example-credit-card-fraud"); o=b.blob("credit-card-fraud/dataset/creditcard.csv"); print("GCS training object visible:", o.exists()); c.close()'
-```
-
-The service account should have only the permissions needed for the configured
-bucket. A service-account key is a long-lived secret; use workload identity or
-short-lived credentials instead if the cluster supports them, and delete or
-rotate a temporary test key when it is no longer needed.
-
-### Amazon S3 (additional configured store)
-
-The current YAML selects the `expops` profile. If that
-profile is backed by your local AWS shared credentials file, upload only the
-credentials file. The region is already configured in YAML, so a separate AWS
-config file is unnecessary for this case. If the profile does not exist yet,
-first run `aws configure --profile expops` locally, or change the profile name
-in YAML. This PowerShell block makes only one cluster connection:
-
-```powershell
-$awsCredentials = Join-Path $HOME '.aws\credentials'
-$sshTarget = 'e1115319@xlogin.comp.nus.edu.sg'
-$proxyJump = 'e1115319@stujump.comp.nus.edu.sg'
-
-scp -o "ProxyJump=$proxyJump" $awsCredentials "${sshTarget}:~/.expops-aws-credentials-upload"
-if ($LASTEXITCODE -ne 0) {
-    throw "AWS credentials upload failed"
-}
-```
-
-This copies temporary session tokens too when they are present in the shared
-credentials file, but those credentials will stop working when they expire. If
-the profile uses AWS IAM Identity Center (SSO), configure the AWS CLI on the
-cluster and run `aws sso login --profile expops` there instead of copying its
-local SSO cache.
-
-Then run this in the existing cluster login session. The move and permissions
-are needed only after uploading a new file; the exports are needed after every
-new login. Do not copy AWS keys into the repository or project config:
-
-```bash
-mkdir -p "$HOME/.config/expops"
-mv "$HOME/.expops-aws-credentials-upload" \
-  "$HOME/.config/expops/aws-credentials"
-chmod 700 "$HOME/.config/expops"
-chmod 600 "$HOME/.config/expops/aws-credentials"
-
-export AWS_PROFILE="expops"
-export AWS_DEFAULT_REGION="ap-southeast-1"
-export AWS_SHARED_CREDENTIALS_FILE="$HOME/.config/expops/aws-credentials"
-
-python -c 'import boto3; c=boto3.Session(profile_name="expops", region_name="ap-southeast-1").client("s3"); c.head_object(Bucket="expops-test-bucket-755933694771-ap-southeast-1-an", Key="credit-card-fraud/creditcard.csv"); print("S3 training object visible")'
-```
-
-Use both credential blocks while both object stores remain declared in
-`compute_config.yaml`. The training dataset and cache currently use GCS; the S3
-store is available as an alternative dataset location.
-These checks must run on a host with the same network policy and shared home
-filesystem used by the worker jobs.
-
-## 6. Submit the pipeline
-
-After a new login, reactivate the environment and repeat the exports before
-running ExpOps:
-
-```bash
-cd "$HOME/fyp-expops"
-
-export TMPDIR="$HOME/fyp-expops/.tmp"
-export TMP="$TMPDIR"
-export TEMP="$TMPDIR"
-export JOBLIB_TEMP_FOLDER="$TMPDIR/joblib"
-export PIP_CACHE_DIR="$HOME/fyp-expops/.pip-cache"
-export XDG_CACHE_HOME="$HOME/fyp-expops/.cache"
-export DASK_TEMPORARY_DIRECTORY="$HOME/fyp-expops/.dask"
-export MLOPS_WORKSPACE_DIR="$HOME/fyp-expops"
-export MLOPS_WORKSPACE_BASE_DIR="$HOME/fyp-expops/.workspaces"
-export MLOPS_DATA_MATERIALIZATION_DIR="$HOME/fyp-expops/.materialized-data"
-export MLOPS_WORKSPACE_CLEANUP="always"
-export MLOPS_DASK_WAIT_FOR_WORKERS_SEC="120"
-
-mkdir -p \
-  "$TMPDIR" \
-  "$JOBLIB_TEMP_FOLDER" \
-  "$PIP_CACHE_DIR" \
-  "$XDG_CACHE_HOME" \
-  "$DASK_TEMPORARY_DIRECTORY" \
-  "$MLOPS_WORKSPACE_BASE_DIR" \
-  "$MLOPS_DATA_MATERIALIZATION_DIR"
-
-source .venv/bin/activate
-
-read -rsp "CREDIT_CARD_FRAUD_SQL_PASSWORD: " CREDIT_CARD_FRAUD_SQL_PASSWORD
-printf '\n'
-export CREDIT_CARD_FRAUD_SQL_PASSWORD
-
-# Redis metadata alternative:
-# read -rsp "CREDIT_CARD_FRAUD_REDIS_PASSWORD: " CREDIT_CARD_FRAUD_REDIS_PASSWORD
-# printf '\n'
-# export CREDIT_CARD_FRAUD_REDIS_PASSWORD
-
-export AWS_PROFILE="expops"
-export AWS_DEFAULT_REGION="ap-southeast-1"
-export AWS_SHARED_CREDENTIALS_FILE="$HOME/.config/expops/aws-credentials"
-
-export GOOGLE_APPLICATION_CREDENTIALS="$HOME/.config/expops/gcp-service-account.json"
-export GOOGLE_CLOUD_PROJECT="exp-ops-506607"
+mkdir -p /var/tmp/e1115319-expops-credit-card-fraud
+chmod 700 /var/tmp/e1115319-expops-credit-card-fraud
 
 python -c 'import tempfile; print(tempfile.gettempdir())'
-python credit-card-fraud/scripts/inspect_storage_auth.py
-
-expops run credit-card-fraud
-run_status=$?
-unset CREDIT_CARD_FRAUD_SQL_PASSWORD
-
-latest_log=$(ls -1t "$HOME/fyp-expops/credit-card-fraud/.credit-card-fraud/logs/"*.log 2>/dev/null | head -n 1)
-printf 'ExpOps exit status: %s\n' "$run_status"
-printf 'Latest log: %s\n' "$latest_log"
-
-if [ -n "$latest_log" ]; then
-  grep -nE ' - ERROR - |Traceback|Process .* failed|pipeline execution completed successfully' "$latest_log"
-fi
+quota -s
 ```
 
-Accept the run only when `run_status` is `0`, the latest log contains the final
-success message, and it contains no `ERROR`, traceback, or failed-process line.
-For S3, lowercase Botocore handler names containing words such as
-`redirect_from_error` are debug internals; the ` - ERROR - ` level marker above
-is the meaningful failure check.
+This cluster has a small per-user `/tmp` quota. Redirecting Python temporary
+files, pip caches and ExpOps workspaces to shared home avoids that limit.
+The printed temporary directory should be inside the run directory. The thread
+limits suit the one-core workers; `zlib` selects a common Dask compression codec.
+The private `/var/tmp` directory is the SQLite location in the compute file.
+
+## 4. Download the compute config and run
+
+```bash
+curl --fail --location \
+  "https://raw.githubusercontent.com/Professional-Procrastinat0r/credit-card-fraud/feature/git-s3-gcs-sqlite-slurm/configs/compute.git.slurm.yaml" \
+  -o compute.git.slurm.yaml
+
+expops run --project local --compute compute.git.slurm.yaml
+printf 'ExpOps exit code: %s\n' "$?"
+```
+
+After this branch is merged, replace `feature/git-s3-gcs-sqlite-slurm` in the URL
+with `main`. The config independently pins the Git source to
+`8e76706f5394483d82126dbab671e4ec92639cf3`.
+
+`--project local` selects the Git mount containing `configs/project_config.yaml`.
+Here `local` is an alias for Git, not a local-filesystem provider. `--compute`
+selects the downloaded deployment config; there is no `run --config` argument.
+ExpOps retrieves the project into `.expops-sources/credit-card-fraud`, loads its
+scripts and requirements, and runs the declared pipeline. You do not separately
+clone/upload the repo or download/upload the already available S3 dataset.
+
+To check only source retrieval, you may add `--prepare-only` to the same command.
+That prepares the source without executing the pipeline.
+
+## 5. Check completion and repeat for caching
+
+The CLI prints the run ID, log path and process summary. Expect exit code 0 and
+zero failed processes. With an empty database and cache, the first run should
+execute all 25 processes. An unchanged repeat with valid cache entries should
+report all 25 cached. Existing metadata was preserved during cleanup, so your
+next run may already be a cache hit. The cache TTL is 24 hours.
+
+To inspect the latest log:
+
+```bash
+latest_log=$(ls -t .expops-sources/credit-card-fraud/.credit-card-fraud/logs/*.log | head -n 1)
+grep -E 'Process results:|Pipeline completed successfully' "$latest_log"
+```
+
+Repeat the normal command:
+
+```bash
+expops run --project local --compute compute.git.slurm.yaml
+printf 'ExpOps exit code: %s\n' "$?"
+```
+
+Reports are saved through the GCS `artefact` mount; the run's chart metadata
+records the managed object reference. A cache hit reuses stored process outputs,
+including the report. Once finished:
+
+```bash
+exit
+```
+
+This leaves the compute-node shell and releases the driver allocation. A later
+allocation on `xcnc17` can reuse the SQLite database and GCS cache.
+
+## Where files and state live
+
+| Location | Purpose |
+| --- | --- |
+| `~/fyp-expops/expops-platform/` | Installed platform source and `.venv` |
+| `~/fyp-expops/git-s3-gcs-sqlite/` | Compute config, retrieved fraud source, logs, project environments and temporary workspaces |
+| `/var/tmp/e1115319-expops-credit-card-fraud/metadata.sqlite` on `xcnc17` | Run metadata and cache indices |
+| S3 `expops-test-bucket-755933694771-ap-southeast-1-an/credit-card-fraud/dataset/` | Streaming input dataset |
+| GCS `expops-example-credit-card-fraud/credit-card-fraud/slurm-git-s3-sqlite/cache` and `/artefact` | Managed process outputs and reports |
+| `~/.config/expops/` | Provider credentials, outside the run and source directories |
+
+SQLite WAL requires driver and workers to access the database on the same host.
+Shared home is NFS and is not the live WAL location. On this cluster `/dev/shm`
+is isolated between allocations; `/var/tmp` is node-local and visible to separate
+jobs on `xcnc17`. Node cleanup or disk loss can remove its metadata and cache
+indices even while GCS objects remain. Choose a reachable network database for
+durable metadata or workers across multiple hosts. This is a database deployment
+choice, not a VFS policy.
+
+## Development only: upload or update expops-platform
+
+This section installs the platform from a development checkout. It is separate
+from running the fraud experiment. Your current installation already exists,
+so skip it for normal runs. A published release would be installed as a versioned
+package into a Python environment; production users would not upload our checkout.
+
+### Export and upload the source
+
+From Windows PowerShell in `D:\NUS\FYP`, commit the platform changes you intend
+to test, then export tracked files from that commit:
+
+```powershell
+git -C .\expops-platform archive --format=tar.gz --output=..\expops-platform.tar.gz HEAD
+ssh -J e1115319@stujump.comp.nus.edu.sg e1115319@xlogin.comp.nus.edu.sg 'mkdir -p ~/fyp-expops'
+scp -o ProxyJump=e1115319@stujump.comp.nus.edu.sg .\expops-platform.tar.gz e1115319@xlogin.comp.nus.edu.sg:~/fyp-expops/expops-platform.tar.gz
+```
+
+The archive contains committed source, not local credentials, environments, Git
+history or untracked files. Uncommitted changes are intentionally not uploaded.
+
+### Install into the canonical location
+
+In Bash on the login node, while no ExpOps runs are active:
+
+```bash
+umask 077
+mkdir -p "$HOME/fyp-expops/expops-platform"
+cd "$HOME/fyp-expops/expops-platform" || exit
+export TMPDIR="$PWD/.tmp" TMP="$PWD/.tmp" TEMP="$PWD/.tmp"
+export PIP_CACHE_DIR="$PWD/.pip-cache"
+mkdir -p "$TMPDIR" "$PIP_CACHE_DIR"
+
+# Replace the previously uploaded source; retain this environment and its caches.
+test -s ../expops-platform.tar.gz || exit
+find . -mindepth 1 -maxdepth 1 \
+  ! -name .venv ! -name .tmp ! -name .pip-cache -exec rm -rf -- {} +
+tar -xzf ../expops-platform.tar.gz -C .
+
+# On the first installation only; subsequent updates reuse the existing venv.
+test -x .venv/bin/python || python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e '.[aws,gcp,slurm]'
+python -m pip check
+expops run --help
+rm -- ../expops-platform.tar.gz
+```
+
+This requires a Python version supported by the project's dependencies; this
+cluster installation uses Python 3.12. Upgrade pip before resolving the S3/GCS
+dependencies to avoid the resolver failure encountered with pip 24. Editable
+installation points at this stable source directory, so future source updates
+do not need a new run directory. An archive has no `.git` history, so the package
+can report fallback version `0.0.0`; record the exported commit separately when
+tracking which development build was tested.
+
+ExpOps normally installs itself into each project environment. After changing
+the platform's declared dependencies, reinstall that editable package into any
+existing project environments before rerunning:
+
+```bash
+platform="$HOME/fyp-expops/expops-platform"
+for env in "$HOME/fyp-expops/git-s3-gcs-sqlite/.expops-sources/credit-card-fraud/.credit-card-fraud/envs/"*; do
+  [ -x "$env/bin/python" ] || continue
+  "$env/bin/python" -m pip install -e "$platform"
+  "$env/bin/python" -m pip check
+done
+```
+
+For a fresh run, ExpOps creates those project environments itself. Return to
+step 1 for the normal experiment workflow; no development scripts are involved.
