@@ -62,7 +62,7 @@ The expanded pipeline contains 25 nodes: three training nodes, three held-out pr
 | `configs/compute.local.yaml` | Two local Dask workers | Local SQLite | Local files under this project |
 | `configs/compute.cloud.yaml` | Two local Dask workers | PostgreSQL | S3 input, GCS cache/artefacts |
 | `configs/compute_config.yaml` | Two SLURM workers | PostgreSQL | GCS input/cache/artefacts, with commented S3 alternatives |
-| `configs/compute.git.slurm.yaml` | Same SLURM deployment, project retrieved from pinned Git commit | PostgreSQL | Same GCS mounts; no fraud checkout required |
+| `configs/compute.git.slurm.yaml` | Two SLURM workers and an allocated driver; pinned Git project | Allocation-owned Redis with saved metadata | S3 input, GCS cache/artefacts |
 
 The default `compute_config.yaml` remains the SLURM deployment. Select the local
 profile explicitly for a local run without cloud credentials. All profiles mount
@@ -205,7 +205,7 @@ PostgreSQL uses the `CREDIT_CARD_FRAUD_SQL_PASSWORD` environment reference;
 GCS uses Application Default Credentials. The cloud profile selects the
 S3 input store with the AWS `expops` profile and uses GCS for cache/artefacts;
 the checkout SLURM profile uses GCS for all three. The standalone Git/SLURM
-profile uses S3 input and GCS cache/artefacts with Supabase PostgreSQL.
+profile uses S3 input and GCS cache/artefacts with allocation-owned Redis.
 Commented Redis metadata,
 S3 input and alternative artefact providers remain available. Activate a complete
 alternative block and install/configure its provider before using it. Credential
@@ -225,8 +225,9 @@ commands. The full-data local/cloud-storage test on 9 October 2026 completed
 all 25 processes, and its repeated run reused all 25 cached results. The three
 seed branches, nine scoring branches and final PNG were verified. Mounted
 SLURM runs with Git/S3/GCS combinations and the full dataset passed on 12 October
-using Redis metadata. This branch's Supabase deployment remains to be verified;
-its currently configured endpoint timed out from the login and compute nodes.
+using Redis metadata. Hosted PostgreSQL and Redis endpoints timed out from
+the tested cluster nodes, so this profile starts Redis inside the driver job
+and preserves its metadata between allocations. See the walkthrough for results.
 
 ## Run the same project from Git
 
@@ -236,14 +237,14 @@ running the driver. From a writable directory containing that file:
 
 ```bash
 expops run --project local --compute compute.git.slurm.yaml --prepare-only
-expops run --project local --compute compute.git.slurm.yaml
 ```
 
-The first command retrieves the project without starting workers, building
-environments or opening the metadata database. The second executes it and needs
-the SLURM/storage setup in [slurm.md](slurm.md).
-To test with local Dask workers first, add `--local` to the second command; this
-keeps the same remote storage settings.
+This retrieves the project without starting workers, building environments or
+opening the metadata database. For training, follow [slurm.md](slurm.md) and
+submit the supplied driver job. It starts Redis inside its allocation before
+invoking the normal ExpOps run command, exports summaries and reports, and saves
+metadata for the next run. Running this profile directly on the login node
+requires a separately running Redis endpoint.
 
 The Git profile mounts the repository root as `local`, so the project
 configuration, scripts, requirements and nested parallel experiment are the
@@ -256,7 +257,7 @@ profile pins source commit `8e76706f5394483d82126dbab671e4ec92639cf3`; update
 This fetches the fraud project only. Install a VFS-capable ExpOps platform
 separately, keep Git on `PATH`, and configure the selected storage credentials.
 The dataset remains in S3. Follow [slurm.md](slurm.md) to check credentials,
-submit the driver, verify PostgreSQL process records and compare a warm run.
+submit the driver, verify exported Redis process records and compare a warm run.
 
 ## Historical results before VFS migration
 

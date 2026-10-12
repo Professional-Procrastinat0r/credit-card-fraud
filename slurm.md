@@ -1,45 +1,71 @@
 # Git source, S3 input and GCS outputs on SLURM
 
 This deployment uses the current 25-process nested fraud experiment with
-streaming training input and Supabase PostgreSQL metadata. It needs an installed
+streaming training input and Redis metadata inside the driver allocation. It needs an installed
 ExpOps runtime and credentials, but no existing fraud checkout or local CSV.
 
 | Resource | Location |
 |---|---|
 | Project source | Git commit `8e76706f5394483d82126dbab671e4ec92639cf3` |
 | Training CSV | `s3://expops-test-bucket-755933694771-ap-southeast-1-an/credit-card-fraud/dataset/creditcard.csv` |
-| Cache | `gs://expops-example-credit-card-fraud/credit-card-fraud/slurm-git-s3-supabase/cache/` |
-| Artefacts | `gs://expops-example-credit-card-fraud/credit-card-fraud/slurm-git-s3-supabase/artefact/` |
-| Metadata | Supabase PostgreSQL, selected by the compute YAML |
+| Cache | `gs://expops-example-credit-card-fraud/credit-card-fraud/slurm-git-s3-redis/cache/` |
+| Artefacts | `gs://expops-example-credit-card-fraud/credit-card-fraud/slurm-git-s3-redis/artefact/` |
+| Metadata | Allocation-owned Redis with snapshots in shared home storage |
 
-The deployment branch is `feature/git-s3-gcs-supabase-slurm`. It builds on the
+The deployment branch is `feature/git-s3-gcs-redis-slurm`. It builds on the
 streaming fraud branch without adding the earlier backend-matrix fixture trees.
 After merging, download the same files from `main`. The compute file's Git commit
 pin remains independent of the branch used to download the deployment files;
 update that pin deliberately when you want to execute changed project code.
 
-## Current verification and blocker
+## Current deployment
 
 The latest tested platform source, including the helper-import and environment
 bootstrap fixes, is under `~/fyp-expops/vfs-test-2026-10-12/platform`. The prepared
 interpreter is
 `~/fyp-expops/vfs-test-2026-10-12/cloud-preflight/.venv/bin/python`.
-It imports that source and has the PostgreSQL, S3, GCS and SLURM libraries.
+It imports that source and has the Redis, S3, GCS and SLURM libraries.
 The older `~/fyp-expops/expops-platform` directory is not the current deployment.
 The prepared test environment has no `expops` console script, so the commands
 below use `python -m expops.main` through an explicit interpreter variable.
 
-On 12 October, TCP connections to the currently configured Supabase host timed
-out from both `xlogin2` and `xcnc17`, on ports 5432 and 6543. This exact PostgreSQL
-deployment has therefore not passed end-to-end acceptance. Confirm the current
-endpoint in Supabase Dashboard before training; if it remains unreachable,
-resolve database/network availability first. A password cannot fix a TCP timeout.
-The earlier combined SLURM acceptance used Redis metadata, not Supabase.
+The configured Supabase endpoint timed out from the login and compute nodes.
+Redis Cloud also timed out from `xlogin2` and `xcnc17`/`xcnc18`/`xcnc19`; the older
+commented Redis hostname no longer resolved. These observations do not establish
+the cause of the network restriction. This test therefore runs Redis inside the
+SLURM allocation, as in the earlier combined acceptance.
 
-The profile selects the **session pooler** on port 5432, suited to the ordinary
-PostgreSQL client. Supabase's transaction pooler on 6543 requires driver changes
-for prepared statements; do not switch only the port to bypass a failure.
-See [Supabase connection guidance](https://supabase.com/docs/guides/database/connecting-to-postgres).
+The batch driver starts an authenticated Redis server on its allocated cluster
+IP and a free port, then exports `MLOPS_REDIS_HOST`, `MLOPS_REDIS_PORT` and the
+generated password before ExpOps resolves the worker plans. It also writes
+`compute.resolved-<job-id>.yaml` with that endpoint, so controller interpreter
+handoff uses the same address. It contains credential references, not passwords.
+A worker does not
+connect to its own localhost. Normal shutdown saves `redis-state/metadata.rdb`;
+the next allocation reloads those cache indices and run records. GCS continues
+to hold cached result bytes and artefacts.
+
+Keep the same run directory for the cache test. A file lock prevents concurrent
+drivers from using the same Redis state. Redis is stopped at job completion;
+summaries and verified PNGs are exported before shutdown so they remain readable
+afterward. This is a test deployment, not a continuously available metadata
+service. An abrupt kill can lose changes since the last snapshot.
+
+Verified on 12 October 2026 using the full 284,807-row S3 CSV:
+
+| Allocation | Result | Driver elapsed |
+|---|---|---|
+| Cold `936020` | Completed; all 25 processes executed | 7m 27s |
+| New allocation `936044` | Reloaded Redis snapshot; all 25 processes cached | 2m 41s |
+
+Both parent jobs exited `0:0`. Metrics and the verified GCS PNG were identical.
+The new allocation used a different port and password, confirming that metadata
+reload preserved cache discovery. Redis was shut down after each job. Access
+to the driver's Redis was also checked from `xcnc18` and `xcnc19`.
+An initial attempt failed because controller handoff used the template localhost
+endpoint; rendering the per-job compute file fixed that deployment error.
+These timings used already prepared project environments after the initial
+attempt built them; a fresh user's first environment setup takes additional time.
 
 ## 1. Connect to the cluster
 
@@ -55,11 +81,14 @@ All following commands are Bash on the cluster unless marked PowerShell.
 
 ```bash
 export EXPOPS_PYTHON="$HOME/fyp-expops/vfs-test-2026-10-12/cloud-preflight/.venv/bin/python"
-"$EXPOPS_PYTHON" -c 'import expops, psycopg, s3fs, gcsfs, dask_jobqueue; print(expops.__file__)'
+"$EXPOPS_PYTHON" -c 'import expops, redis, s3fs, gcsfs, dask_jobqueue; print(expops.__file__)'
 "$EXPOPS_PYTHON" -m expops.main run --help
+export EXPOPS_REDIS_SERVER="$HOME/fyp-expops/vfs-test-2026-10-12/redis/usr/bin/redis-server"
+export EXPOPS_REDIS_LIBRARY_DIR="$HOME/fyp-expops/vfs-test-2026-10-12/redis/usr/lib/x86_64-linux-gnu"
+test -x "$EXPOPS_REDIS_SERVER"
 
-mkdir -p "$HOME/fyp-expops/git-s3-gcs-supabase"
-cd "$HOME/fyp-expops/git-s3-gcs-supabase"
+mkdir -p "$HOME/fyp-expops/git-s3-gcs-redis"
+cd "$HOME/fyp-expops/git-s3-gcs-redis"
 umask 077
 export TMPDIR="$PWD/tmp" TMP="$PWD/tmp" TEMP="$PWD/tmp"
 export MLOPS_WORKSPACE_BASE_DIR="$PWD/workspaces"
@@ -81,7 +110,7 @@ not install the fraud experiment; the project controls its own requirements.
 ## 3. Download deployment files only
 
 ```bash
-FRAUD_DEPLOY_REF="feature/git-s3-gcs-supabase-slurm"
+FRAUD_DEPLOY_REF="feature/git-s3-gcs-redis-slurm"
 RAW="https://raw.githubusercontent.com/Professional-Procrastinat0r/credit-card-fraud/$FRAUD_DEPLOY_REF"
 curl --fail --location "$RAW/configs/compute.git.slurm.yaml" -o compute.git.slurm.yaml
 curl --fail --location "$RAW/configs/storage-constraints.txt" -o storage-constraints.txt
@@ -101,76 +130,47 @@ selects `local/src/model.py`, reporting code and requirement files. ExpOps retri
 the source into `.expops-sources/credit-card-fraud`. Here `local` is a namespace
 alias for Git, not a statement that the source was already on local disk.
 
-## 4. Load credentials and confirm Supabase
-
-GCP ADC, the AWS `expops` profile and Git credentials were configured separately
-on the shared cluster home. Load the cloud environment file:
+## 4. Load the existing cloud and Git credentials
 
 ```bash
 source "$HOME/.config/expops/cloud.env"
 git ls-remote https://github.com/Professional-Procrastinat0r/credit-card-fraud.git \
-  refs/heads/feature/git-s3-gcs-supabase-slurm
+  refs/heads/feature/git-s3-gcs-redis-slurm
 ```
 
-That file selects the existing GCP ADC and AWS credential/config files. Do not
-copy credentials into the fraud source or compute YAML. A user setting this up
-from scratch must provision their own ADC, AWS profile and Git authentication;
-these existing files are specific to this account. Workers inherit selected
-environment settings and read credential files through shared home storage.
+The cloud file selects the existing GCP ADC and AWS `expops` credential/config
+files. Git uses its existing credential helper. Workers read these files through
+shared home storage. A new user must provision their own credentials separately.
 
-Open Supabase Dashboard, choose **Connect -> Session pooler**, and compare its
-host, port, username and database with `storage.metadata.connection` in the YAML:
+No Supabase or Redis Cloud password is required for this test. The driver creates
+an allocation password and passes it through the configured environment secret
+reference. Password values are not written into source, YAML or Redis config
+files. The `redis-server` binary is separate from the Python `redis` client; both
+already exist in the prepared test environment. A fresh deployment must install
+a server binary or use a reachable managed Redis service instead.
 
-```bash
-nano compute.git.slurm.yaml
-```
-
-Keep `sslmode: require`. Use the PostgreSQL database password, not a Supabase API
-key. Read it without putting its literal value in the shell command:
-
-```bash
-read -r -s -p "Supabase database password: " CREDIT_CARD_FRAUD_SQL_PASSWORD
-printf '\n'
-export CREDIT_CARD_FRAUD_SQL_PASSWORD
-```
-
-The reference `CREDIT_CARD_FRAUD_SQL_PASSWORD` in YAML selects this variable.
-SLURM inherits it when you submit the driver job; it is also available to the
-worker metadata clients. Do not unset it before submitting both test runs.
-
-## 5. Check access and optionally retrieve source without running
-
-```bash
-"$EXPOPS_PYTHON" deployment.py preflight --compute compute.git.slurm.yaml
-```
-
-Expected stages: Git model source, S3 CSV size/header, GCS cache write/read,
-GCS artefact write/read, then **Supabase PostgreSQL SELECT 1: OK**. The two tiny
-GCS `_preflight` objects are retained as check evidence; no training runs are
-created. It does not create the application metadata schema.
-
-To check only files while diagnosing PostgreSQL:
+## 5. Check mounted files and optionally retrieve source
 
 ```bash
 "$EXPOPS_PYTHON" deployment.py preflight --compute compute.git.slurm.yaml --files-only
-```
-
-Optionally exercise CLI source retrieval:
-
-```bash
 "$EXPOPS_PYTHON" -m expops.main run --project local \
   --compute compute.git.slurm.yaml --prepare-only
 ls .expops-sources/credit-card-fraud/configs
 ```
 
+The file check reads Git source and the S3 CSV size/header, then writes and reads
+two tiny GCS `_preflight` objects retained as evidence. It starts no training run.
+Use `--files-only` on the login node: metadata is checked inside the allocated
+driver after Redis starts.
+
 `--prepare-only` retrieves project source without submitting workers, building
-environments or connecting to PostgreSQL. The actual run refreshes the named
-source directory while preserving its runtime directory. It does not download
-the S3 training CSV as a prepared local dataset in streaming mode.
+environments or connecting to metadata. The actual run refreshes the named
+source directory while preserving its runtime directory. It does not save a
+prepared raw S3 CSV in streaming mode.
 
 ## 6. Submit the driver and let ExpOps provision workers
 
-Proceed when database access works:
+Submit from this run directory:
 
 ```bash
 JOB_ID=$(sbatch --parsable --export=ALL run.slurm)
@@ -181,10 +181,11 @@ tail -F "driver-$JOB_ID.log"
 ```
 
 Use Ctrl+C to stop following the log; it does not cancel the job. The driver job
-runs on `xcnc17`. Its preflight checks access from the compute node before invoking:
+runs on `xcnc17`, starts Redis and checks authenticated PING plus a temporary
+metadata write/read/delete from that compute node before invoking:
 
 ```bash
-"$EXPOPS_PYTHON" -m expops.main run --project local --compute compute.git.slurm.yaml
+"$EXPOPS_PYTHON" -m expops.main run --project local --compute "$COMPUTE_CONFIG"
 ```
 
 The SLURM provider submits two additional worker jobs in the configured pool.
@@ -193,7 +194,7 @@ setup installs the declared model/reporting dependencies, then workers validate
 the CSV, train three models, score nine held-out partitions, aggregate metrics
 and publish the PNG to GCS. Raw CSV bytes stream from S3 into pandas; pandas
 still holds the dataset in memory. Models, spilled payloads and result cache
-objects use GCS; PostgreSQL keeps metadata and cache indices.
+objects use GCS; Redis keeps metadata and cache indices.
 
 The default worker walltime is 30 minutes and driver walltime is one hour. Pending
 jobs can exceed the 10-minute worker startup timeout; increase it deliberately
@@ -205,37 +206,31 @@ After the driver exits:
 
 ```bash
 sacct -j "$JOB_ID" -X --format=JobID,JobName,State,ExitCode,Elapsed
-grep -E 'Run ID|run_id|Pipeline|Process results|exit status|ERROR|Traceback' "driver-$JOB_ID.log"
-ls -lt .expops-sources/credit-card-fraud/.credit-card-fraud/logs/
-"$EXPOPS_PYTHON" deployment.py inspect --compute compute.git.slurm.yaml
+grep -E 'Pipeline|Process results|exit status|ERROR|Traceback' "driver-$JOB_ID.log"
+"$EXPOPS_PYTHON" -m json.tool "results/run-$JOB_ID.json"
+ls -lh redis-state/metadata.rdb
+ls -lh "results/report-$JOB_ID/fraud_seed_data_parallel_report.png"
 ```
 
-The driver must be `COMPLETED` with `0:0`, and the matching PostgreSQL run must
-be `completed`. Take the run ID from the log or inspection output:
+The driver must be `COMPLETED` with `0:0`. The summary must have `status: completed`,
+25 process records and one chart group. A fresh state/cache namespace should show
+`{"completed": 25}`. The summary also records metrics and managed chart references.
+Redis is now stopped; use this exported JSON rather than a live metadata query
+from the login node. `metadata.rdb` retains the backing metadata for the next run.
 
-```bash
-RUN_ID="paste-the-first-run-id-here"
-"$EXPOPS_PYTHON" deployment.py inspect --compute compute.git.slurm.yaml \
-  --run-id "$RUN_ID" --download-report reports/first
-```
-
-For a fresh metadata/cache namespace, expect `{"completed": 25}` and one chart
-group. Confirm all 25 process records, not merely the final success line. If
-this namespace was used already, legitimate cache hits can appear on the first
-run. The helper downloads and verifies the published GCS PNG.
-
-From Windows, copy it for viewing:
+From Windows, copy the report (replace the example job ID):
 
 ```powershell
+$jobId = "YOUR_DRIVER_JOB_ID"
 scp -J e1115319@stujump.comp.nus.edu.sg `
-  e1115319@xlogin.comp.nus.edu.sg:~/fyp-expops/git-s3-gcs-supabase/reports/first/fraud_seed_data_parallel_report.png `
+  "e1115319@xlogin.comp.nus.edu.sg:~/fyp-expops/git-s3-gcs-redis/results/report-$jobId/fraud_seed_data_parallel_report.png" `
   .\fraud_seed_data_parallel_report.png
 ```
 
 ## 8. Repeat to verify cache reuse
 
-Return to the same directory and keep the same source revision, configuration,
-dataset, credentials and storage prefixes:
+Keep the same directory, source revision, configuration, dataset, Redis state
+and GCS prefixes. Wait for the first driver to finish:
 
 ```bash
 WARM_JOB_ID=$(sbatch --parsable --export=ALL run.slurm)
@@ -243,28 +238,38 @@ WARM_JOB_ID=${WARM_JOB_ID%%;*}
 tail -F "driver-$WARM_JOB_ID.log"
 ```
 
-After completion, inspect that run ID exactly as above. Expect `{"cached": 25}`,
-run status `completed`, identical metrics and a retrievable PNG. The controller
-still provisions workers, checks inputs and retrieves source on a warm run;
-cache reuse avoids process recomputation, not all startup or network work.
-Worker jobs cancelled by the controller during normal teardown are expected;
-use the driver exit and pipeline/process records to judge success.
-
-When finished submitting runs:
+After completion, inspect and compare both exported summaries:
 
 ```bash
-unset CREDIT_CARD_FRAUD_SQL_PASSWORD
+"$EXPOPS_PYTHON" - "$JOB_ID" "$WARM_JOB_ID" <<'PY'
+import json,sys
+from pathlib import Path
+cold,warm = [json.loads(Path(f"results/run-{job}.json").read_text()) for job in sys.argv[1:]]
+print("Cold:",cold["status"],cold["processes"])
+print("Warm:",warm["status"],warm["processes"])
+assert cold["status"] == warm["status"] == "completed"
+assert warm["processes"] == {"cached":25}
+assert cold["summary_metrics"] == warm["summary_metrics"]
+print("Cache reuse and identical metrics verified")
+PY
+ls -lh "results/report-$WARM_JOB_ID/fraud_seed_data_parallel_report.png"
 ```
 
-To cancel an active driver, use `scancel "$JOB_ID"` and inspect `squeue -u "$USER"`
-for any remaining worker jobs. Keep the workspaces and GCS objects when comparing
-runs; do not clear cache between the cold and warm tests.
+The second driver reloads the saved Redis metadata, while cached results and
+charts remain in GCS. It generates a new connection password and cluster endpoint;
+neither changes the declared source/input/cache content identity. Startup still
+retrieves source, checks inputs and provisions workers. Expected worker-job
+cancellation during normal teardown does not imply a failed pipeline.
+
+To cancel the driver, use `scancel "$JOB_ID"` and check `squeue -u "$USER"` for
+remaining workers. Keep `redis-state`, the run directory and GCS objects when
+comparing runs. Do not clear them between cold and warm tests.
 
 ## Release installation and current pain points
 
-The package already declares extras for PostgreSQL, S3, GCS and SLURM. Once the
+The package already declares extras for Redis, S3, GCS and SLURM. Once the
 correct project is published to PyPI, the normal installation will be a versioned
-`pip install 'expops[postgres,aws,gcp,slurm]==<released-version>'` in a shared venv.
+`pip install 'expops[redis,aws,gcp,slurm]==<released-version>'` in a shared venv.
 Until then, pip also accepts a wheel or a commit-pinned Git package URL; see
 [pip VCS support](https://pip.pypa.io/en/stable/topics/vcs-support/). The platform
 commits from this test are local and should not be assumed available through a
