@@ -34,12 +34,15 @@ and [srun](https://slurm.schedmd.com/srun.html).
 
 ## 2. Set the runtime, credentials and writable temporary paths
 
-The current prepared platform interpreter is already installed on shared home.
-This pre-release environment has no `expops` console script, so invoke the module:
+The platform source is installed in editable mode from
+`~/fyp-expops/vfs-test-2026-10-12/platform`. Its Python environment is
+`~/fyp-expops/vfs-test-2026-10-12/cloud-preflight/.venv` on shared home.
+Activate that environment to put its `python` and `expops` commands on `PATH`:
 
 ```bash
-export EXPOPS_PYTHON="$HOME/fyp-expops/vfs-test-2026-10-12/cloud-preflight/.venv/bin/python"
+source "$HOME/fyp-expops/vfs-test-2026-10-12/cloud-preflight/.venv/bin/activate"
 source "$HOME/.config/expops/cloud.env"
+command -v expops
 
 mkdir -p "$HOME/fyp-expops/git-s3-gcs-sqlite"
 cd "$HOME/fyp-expops/git-s3-gcs-sqlite"
@@ -56,7 +59,7 @@ mkdir -p "$TMPDIR" "$MLOPS_WORKSPACE_BASE_DIR" "$XDG_CACHE_HOME" "$PIP_CACHE_DIR
 mkdir -p /var/tmp/e1115319-expops-credit-card-fraud
 chmod 700 /var/tmp/e1115319-expops-credit-card-fraud
 
-"$EXPOPS_PYTHON" -c 'import expops, tempfile; print(expops.__file__); print(tempfile.gettempdir())'
+python -c 'import expops, tempfile; print(expops.__file__); print(tempfile.gettempdir())'
 quota -s
 ```
 
@@ -66,9 +69,9 @@ profile; Git uses its configured credential helper. No database password is
 needed. A fresh user must install a VFS-capable ExpOps runtime with AWS, GCP and
 SLURM dependencies and provision their own provider credentials once.
 
-For a released package, activate its venv and use `expops` directly. The current
-test platform source is under `~/fyp-expops/vfs-test-2026-10-12/platform`; the older
-`~/fyp-expops/expops-platform` directory is not the current deployment.
+Activation is shell-local: activate again when opening a new compute-node shell.
+The current package installation provides the normal `expops` command. A future
+released package can be installed into a shared venv with pip in the same way.
 
 ## 3. Download one config and run
 
@@ -77,15 +80,9 @@ curl --fail --location \
   "https://raw.githubusercontent.com/Professional-Procrastinat0r/credit-card-fraud/feature/git-s3-gcs-sqlite-slurm/configs/compute.git.slurm.yaml" \
   -o compute.git.slurm.yaml
 
-"$EXPOPS_PYTHON" -m expops.main run --project local --compute compute.git.slurm.yaml
+expops run --project local --compute compute.git.slurm.yaml
 printf 'ExpOps exit code: %s\n' "$?"
 grep -h 'Process results:' .expops-sources/credit-card-fraud/.credit-card-fraud/logs/*.log | tail -n 2
-```
-
-With a normal package installation, the equivalent command is:
-
-```bash
-expops run --project local --compute compute.git.slurm.yaml
 ```
 
 There is no `--config` flag for `run`. `--project local` selects the Git mount
@@ -98,7 +95,7 @@ are stored through the GCS cache and artefact mounts.
 An optional source-only check uses the same config:
 
 ```bash
-"$EXPOPS_PYTHON" -m expops.main run --project local \
+expops run --project local \
   --compute compute.git.slurm.yaml --prepare-only
 ```
 
@@ -107,7 +104,7 @@ An optional source-only check uses the same config:
 Run the identical command again:
 
 ```bash
-"$EXPOPS_PYTHON" -m expops.main run --project local --compute compute.git.slurm.yaml
+expops run --project local --compute compute.git.slurm.yaml
 printf 'ExpOps exit code: %s\n' "$?"
 ```
 
