@@ -20,8 +20,8 @@
     "bytes": 14
   },
   "vfs-slurm-fixtures/data/samples.csv": {
-    "sha256": "8c56c0adbbf725198c08ee8c1bcb44394c647afeede8bcfe9a3400e215daf64f",
-    "bytes": 14
+    "sha256": "e5120100ae7a8a0256cb19642308b66d89bede97c8d73cd95e53889bd6869bb7",
+    "bytes": 41
   },
   "vfs-slurm-fixtures/deploy-data-seed-materialize/configs/project_config.yaml": {
     "sha256": "50cbf4e89871d11a5d89e0317230f421e51ebd87c230e3ba851f86ffbc0ed1dd",
@@ -60,12 +60,12 @@
     "bytes": 931
   },
   "vfs-slurm-fixtures/parallel/src/helper.py": {
-    "sha256": "d40779cc5165d21b3612c5972f083076495afe52c81008b374a3205ccd03daa8",
+    "sha256": "95d9811ca5419a63c3add753d6bc35fef2ec8840ddb83395220de0af7a22cd10",
     "bytes": 108
   },
   "vfs-slurm-fixtures/parallel/src/main.py": {
-    "sha256": "70278c588497ae9f3f35637adc83ff8d562fb3b294719aa5606c0a96b041d00a",
-    "bytes": 2837
+    "sha256": "dacaa5db258c08d4fb62809f083ebde773da67f201f44eff8da06f5d0bc79ec3",
+    "bytes": 2836
   },
   "vfs-slurm-fixtures/parallel/src/report.py": {
     "sha256": "1731096865781cc0f385c2f33701ff8ec8bcc6e58ddec2267867c5d3684f1592",
