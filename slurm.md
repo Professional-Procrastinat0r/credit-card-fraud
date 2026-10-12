@@ -1,465 +1,277 @@
-# Slurm deployment
+# Git source, S3 input and GCS outputs on SLURM
 
-These instructions use the original nested experiment in `configs/`, now with
-VFS mounts. Platform support is implemented; the real cluster run remains to be
-validated. The full-data local/cloud-storage cold and cached runs have passed.
+This deployment uses the current 25-process nested fraud experiment with
+streaming training input and Supabase PostgreSQL metadata. It needs an installed
+ExpOps runtime and credentials, but no existing fraud checkout or local CSV.
 
-The Git deployment below retrieves the project from its pinned repository commit;
-the archive workflow remains available as a fallback. The current local project
-configuration streams the training CSV from GCS into memory on each execution
-worker that needs it. The Git profile pins the streaming source as well.
-The cluster's `/tmp` filesystem has a small per-user quota, so pip
-temporary files, ExpOps process workspaces, and any explicitly materialized data
-are redirected to persistent storage under `~/fyp-expops`.
+| Resource | Location |
+|---|---|
+| Project source | Git commit `8e76706f5394483d82126dbab671e4ec92639cf3` |
+| Training CSV | `s3://expops-test-bucket-755933694771-ap-southeast-1-an/credit-card-fraud/dataset/creditcard.csv` |
+| Cache | `gs://expops-example-credit-card-fraud/credit-card-fraud/slurm-git-s3-supabase/cache/` |
+| Artefacts | `gs://expops-example-credit-card-fraud/credit-card-fraud/slurm-git-s3-supabase/artefact/` |
+| Metadata | Supabase PostgreSQL, selected by the compute YAML |
 
-The active `configs/compute_config.yaml` uses PostgreSQL metadata, GCS for cache,
-artifacts, and the training dataset, with commented S3 mount alternatives.
-The same project can use Redis metadata by activating the commented block. The login node and every allocated worker
-therefore need outbound access to the selected metadata and object stores.
-`~/fyp-expops` must still be a shared filesystem so workers see the
-retrieved or extracted source, environments, and configured temporary roots.
+The deployment branch is `feature/git-s3-gcs-supabase-slurm`. It builds on the
+streaming fraud branch without adding the earlier backend-matrix fixture trees.
+After merging, download the same files from `main`. The compute file's Git commit
+pin remains independent of the branch used to download the deployment files;
+update that pin deliberately when you want to execute changed project code.
 
-Credential values are not stored in YAML or bundled in the archive. The SQL
-plugin reads the active PostgreSQL password from the deployment-selected
-`CREDIT_CARD_FRAUD_SQL_PASSWORD` environment reference. The GCS plugin uses
-Google Application Default Credentials, while an optional S3 mount
-delegates AWS authentication to Boto3's standard credential chain. The
-commented Redis alternative selects a separate environment reference.
+## Current verification and blocker
 
-Before building the archive, use an `expops-platform` checkout containing mounted
-worker delivery, data materialization, resolved storage plans, plugin-owned
-authentication, and the SQL, GCS, and S3 storage implementations. The required-file
-checks below reject an older platform checkout before it can be uploaded.
+The latest tested platform source, including the helper-import and environment
+bootstrap fixes, is under `~/fyp-expops/vfs-test-2026-10-12/platform`. The prepared
+interpreter is
+`~/fyp-expops/vfs-test-2026-10-12/cloud-preflight/.venv/bin/python`.
+It imports that source and has the PostgreSQL, S3, GCS and SLURM libraries.
+The older `~/fyp-expops/expops-platform` directory is not the current deployment.
+The prepared test environment has no `expops` console script, so the commands
+below use `python -m expops.main` through an explicit interpreter variable.
 
-## Git mount: deploy with only a compute file
+On 12 October, TCP connections to the currently configured Supabase host timed
+out from both `xlogin2` and `xcnc17`, on ports 5432 and 6543. This exact PostgreSQL
+deployment has therefore not passed end-to-end acceptance. Confirm the current
+endpoint in Supabase Dashboard before training; if it remains unreachable,
+resolve database/network availability first. A password cannot fix a TCP timeout.
+The earlier combined SLURM acceptance used Redis metadata, not Supabase.
 
-Use this path to test Git retrieval without uploading the fraud source archive.
-The platform must already be available under `~/fyp-expops/expops-platform`
-(or installed with the same VFS/Git/SLURM functionality). This profile does not
-fetch or install the platform itself. Git must be available on the driver and
-workers that access the Git mount.
+The profile selects the **session pooler** on port 5432, suited to the ordinary
+PostgreSQL client. Supabase's transaction pooler on 6543 requires driver changes
+for prepared statements; do not switch only the port to bypass a failure.
+See [Supabase connection guidance](https://supabase.com/docs/guides/database/connecting-to-postgres).
 
-Download the standalone deployment file on the login node:
+## 1. Connect to the cluster
 
-```bash
-mkdir -p "$HOME/fyp-expops"
-cd "$HOME/fyp-expops"
-
-# Use main after the PR is merged. Until then, use its branch.
-FRAUD_CONFIG_REF="feature/vfs-project-git-slurm"
-curl --fail --location --output compute.git.slurm.yaml \
-  "https://raw.githubusercontent.com/Professional-Procrastinat0r/credit-card-fraud/$FRAUD_CONFIG_REF/configs/compute.git.slurm.yaml"
-```
-
-The file pins project source commit `46d5ad03ef6fbddb5e3bf1e9c373d18f654b6ee3`.
-Its `local` mount is Git-backed; the unchanged project still refers to
-`local/src/model.py` and `local/requirements.txt`. Input, cache and artefact
-mounts match the ordinary SLURM profile, including the commented provider
-alternatives. No second version of the experiment is needed.
-
-Skip archive Steps 1–2. Run the inline quota setup in Step 3, prepare the platform
-environment in Step 4 if needed, and configure credentials in Step 5. Then use
-these commands instead of the checkout command in Step 6:
-
-```bash
-cd "$HOME/fyp-expops"
-
-# Safe source-only check: no jobs, environment builds or database connections.
-expops run --project local --compute compute.git.slurm.yaml --prepare-only
-
-# Start the original nested experiment using SLURM workers.
-expops run --project local --compute compute.git.slurm.yaml
-run_status=$?
-printf 'ExpOps exit status: %s\n' "$run_status"
-unset CREDIT_CARD_FRAUD_SQL_PASSWORD
-```
-
-Source is copied to the project folder printed by the CLI beneath
-`.expops-sources/`; that folder contains `configs/project_config.yaml`, scripts
-and requirements. Its `.credit-card-fraud/logs/` contains the driver logs. Keep
-the parent directory writable and on the shared filesystem. Repeat the same
-command to check cache reuse. Neither `--project` nor `--compute` requires a
-local fraud checkout.
-
-Git source preparation has been verified. Worker startup, credentials, quota and
-completion on the real SLURM cluster still need the upcoming cluster test.
-
-## 1. Build the code archive locally (PowerShell; fallback)
-
-Run this from the Windows checkout. The archive contains `credit-card-fraud/`
-and `expops-platform/`, but excludes the remotely hosted dataset, environments,
-runtime files, and frontend dependencies.
+From your Windows terminal:
 
 ```powershell
-Set-Location "D:\NUS\FYP"
-
-$archive = "credit-card-fraud-slurm-deploy-$(Get-Date -Format yyyyMMdd-HHmmss).tar.gz"
-
-tar.exe -czf $archive '--exclude=.git' '--exclude=.venv' '--exclude=.pytest_cache' '--exclude=graphify-out' '--exclude=.pytest-task-workspaces' '--exclude=.test-workspace' '--exclude=.venvs' '--exclude=.expops-sources' '--exclude=node_modules' '--exclude=.credit-card-fraud' '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=creditcard.csv' credit-card-fraud expops-platform
-
-if ($LASTEXITCODE -ne 0) {
-    throw "tar.exe failed; do not upload the partial archive"
-}
-
-$entries = @(tar.exe -tzf $archive)
-if ($LASTEXITCODE -ne 0) {
-    throw "The archive could not be read back"
-}
-
-$required = @(
-    'credit-card-fraud/configs/project_config.yaml'
-    'credit-card-fraud/configs/compute_config.yaml'
-    'credit-card-fraud/scripts/inspect_storage_auth.py'
-    'expops-platform/pyproject.toml'
-    'credit-card-fraud/src/model.py'
-    'credit-card-fraud/src/plot_metrics.py'
-    'expops-platform/src/expops/worker_delivery.py'
-    'expops-platform/src/expops/worker_runtime.py'
-    'expops-platform/src/expops/storage/filesystem.py'
-    'expops-platform/src/expops/storage/sql_config.py'
-    'expops-platform/src/expops/storage/adapters/gcs_object_store.py'
-    'expops-platform/src/expops/storage/adapters/s3_object_store.py'
-)
-$missing = @($required | Where-Object { $_ -notin $entries })
-if ($missing.Count -ne 0) {
-    throw "Archive is missing required files: $($missing -join ', ')"
-}
-
-$unexpected = @($entries | Where-Object {
-    $_ -match '(^|/)(\.git|\.venv|\.pytest_cache|graphify-out|\.pytest-task-workspaces|\.test-workspace|\.venvs|\.expops-sources|node_modules|\.credit-card-fraud|__pycache__)(/|$)|(^|/)creditcard\.csv$|\.pyc$'
-})
-if ($unexpected.Count -ne 0) {
-    throw "Archive contains excluded files: $($unexpected[0..([Math]::Min(9, $unexpected.Count - 1))] -join ', ')"
-}
-
-Get-Item -LiteralPath $archive | Select-Object FullName, Length, LastWriteTime
+ssh -J e1115319@stujump.comp.nus.edu.sg e1115319@xlogin.comp.nus.edu.sg
 ```
 
-Upload the code archive under a stable remote filename:
+All following commands are Bash on the cluster unless marked PowerShell.
 
-```powershell
-scp -o 'ProxyJump=e1115319@stujump.comp.nus.edu.sg' $archive 'e1115319@xlogin.comp.nus.edu.sg:~/credit-card-fraud-slurm-deploy.tar.gz'
-
-if ($LASTEXITCODE -ne 0) {
-    throw "scp failed; the remote bundle was not accepted"
-}
-```
-
-## 2. Extract the bundle on the Slurm cluster (Bash)
+## 2. Choose the runtime and create an empty run directory
 
 ```bash
-mkdir -p "$HOME/fyp-expops"
+export EXPOPS_PYTHON="$HOME/fyp-expops/vfs-test-2026-10-12/cloud-preflight/.venv/bin/python"
+"$EXPOPS_PYTHON" -c 'import expops, psycopg, s3fs, gcsfs, dask_jobqueue; print(expops.__file__)'
+"$EXPOPS_PYTHON" -m expops.main run --help
 
-tar -xzf "$HOME/credit-card-fraud-slurm-deploy.tar.gz" \
-  -C "$HOME/fyp-expops"
-
-ls -la "$HOME/fyp-expops"
-
-test -f "$HOME/fyp-expops/credit-card-fraud/configs/project_config.yaml"
-test -f "$HOME/fyp-expops/credit-card-fraud/configs/compute_config.yaml"
-test -f "$HOME/fyp-expops/credit-card-fraud/scripts/inspect_storage_auth.py"
-test -f "$HOME/fyp-expops/credit-card-fraud/src/model.py"
-test -f "$HOME/fyp-expops/credit-card-fraud/src/plot_metrics.py"
-test -f "$HOME/fyp-expops/expops-platform/src/expops/worker_delivery.py"
-test -f "$HOME/fyp-expops/expops-platform/src/expops/worker_runtime.py"
-test -f "$HOME/fyp-expops/expops-platform/src/expops/storage/filesystem.py"
-test -f "$HOME/fyp-expops/expops-platform/pyproject.toml"
-test -f "$HOME/fyp-expops/expops-platform/src/expops/storage/sql_config.py"
-test -f "$HOME/fyp-expops/expops-platform/src/expops/storage/adapters/gcs_object_store.py"
-test -f "$HOME/fyp-expops/expops-platform/src/expops/storage/adapters/s3_object_store.py"
-```
-
-Do not continue if extraction or any required-file check returns a nonzero exit
-status. The archive contains the current worktrees, including uncommitted source
-changes; that is useful for this smoke test but is not a reproducible release.
-
-## 3. Configure persistent temporary storage
-
-Run the complete block after every new login, before creating a virtual
-environment, installing packages, or invoking ExpOps. `TMPDIR` protects Python
-and pip builds; `MLOPS_WORKSPACE_BASE_DIR` protects ExpOps process workspaces;
-`MLOPS_DATA_MATERIALIZATION_DIR` holds worker-local object inputs; the Dask and
-joblib variables keep their spill files off `/tmp` too.
-
-```bash
-cd "$HOME/fyp-expops"
-
-export TMPDIR="$HOME/fyp-expops/.tmp"
-export TMP="$TMPDIR"
-export TEMP="$TMPDIR"
-export JOBLIB_TEMP_FOLDER="$TMPDIR/joblib"
-
-export PIP_CACHE_DIR="$HOME/fyp-expops/.pip-cache"
-export XDG_CACHE_HOME="$HOME/fyp-expops/.cache"
-export DASK_TEMPORARY_DIRECTORY="$HOME/fyp-expops/.dask"
-
-export MLOPS_WORKSPACE_DIR="$HOME/fyp-expops"
-export MLOPS_WORKSPACE_BASE_DIR="$HOME/fyp-expops/.workspaces"
-export MLOPS_DATA_MATERIALIZATION_DIR="$HOME/fyp-expops/.materialized-data"
-export MLOPS_WORKSPACE_CLEANUP="always"
-export MLOPS_DASK_WAIT_FOR_WORKERS_SEC="120"
-
-mkdir -p \
-  "$TMPDIR" \
-  "$JOBLIB_TEMP_FOLDER" \
-  "$PIP_CACHE_DIR" \
-  "$XDG_CACHE_HOME" \
-  "$DASK_TEMPORARY_DIRECTORY" \
-  "$MLOPS_WORKSPACE_BASE_DIR" \
-  "$MLOPS_DATA_MATERIALIZATION_DIR"
-
-chmod 700 \
-  "$TMPDIR" \
-  "$JOBLIB_TEMP_FOLDER" \
-  "$PIP_CACHE_DIR" \
-  "$XDG_CACHE_HOME" \
-  "$DASK_TEMPORARY_DIRECTORY" \
-  "$MLOPS_WORKSPACE_BASE_DIR" \
-  "$MLOPS_DATA_MATERIALIZATION_DIR"
-
+mkdir -p "$HOME/fyp-expops/git-s3-gcs-supabase"
+cd "$HOME/fyp-expops/git-s3-gcs-supabase"
+umask 077
+export TMPDIR="$PWD/tmp" TMP="$PWD/tmp" TEMP="$PWD/tmp"
+export MLOPS_WORKSPACE_BASE_DIR="$PWD/workspaces"
+export XDG_CACHE_HOME="$PWD/cache" PIP_CACHE_DIR="$PWD/pip-cache"
+mkdir -p "$TMPDIR" "$MLOPS_WORKSPACE_BASE_DIR" "$XDG_CACHE_HOME" "$PIP_CACHE_DIR"
+"$EXPOPS_PYTHON" -c 'import tempfile; print(tempfile.gettempdir())'
 quota -s
-python3 -c 'import tempfile; print(tempfile.gettempdir())'
-touch "$TMPDIR/.write-test"
-rm "$TMPDIR/.write-test"
 ```
 
-The Python command must print a path under `~/fyp-expops`, not `/tmp`.
+The temporary path should be below this run directory. Shared home storage lets
+the driver and workers see the environments, credential files and source delivery.
+The inline redirection avoids this cluster's small per-user `/tmp` quota.
 
-## 4. Create and verify the Linux driver environment
+For a future release, activate a shared venv containing the released package and
+set `EXPOPS_PYTHON="$(command -v python)"` instead. The installed `expops` command
+is equivalent to `"$EXPOPS_PYTHON" -m expops.main`. Installing the platform does
+not install the fraud experiment; the project controls its own requirements.
 
-Run this immediately after Step 3 in the same login so the temporary-storage
-environment remains active.
+## 3. Download deployment files only
 
 ```bash
-cd "$HOME/fyp-expops"
-
-python3 -m venv .venv
-source .venv/bin/activate
-
-python -m pip install --no-cache-dir --upgrade pip setuptools wheel
-python -m pip install --no-cache-dir -e "./expops-platform[slurm,aws,gcp,postgres]"
-
-python -m pip check
-python -c 'import boto3, dask_jobqueue, expops, psycopg; from google.cloud import storage; from expops.cluster import ComputeSession; print(expops.__file__)'
-command -v expops
+FRAUD_DEPLOY_REF="feature/git-s3-gcs-supabase-slurm"
+RAW="https://raw.githubusercontent.com/Professional-Procrastinat0r/credit-card-fraud/$FRAUD_DEPLOY_REF"
+curl --fail --location "$RAW/configs/compute.git.slurm.yaml" -o compute.git.slurm.yaml
+curl --fail --location "$RAW/configs/storage-constraints.txt" -o storage-constraints.txt
+curl --fail --location "$RAW/scripts/run_git_slurm.sbatch" -o run.slurm
+curl --fail --location "$RAW/scripts/slurm_deployment.py" -o deployment.py
+export PIP_CONSTRAINT="$PWD/storage-constraints.txt"
 ```
 
-Those commands install the active PostgreSQL/GCS backends and the optional S3
-alternative. The commented Redis alternative can be installed and verified with:
+The constraints keep the storage SDK versions compatible while ExpOps creates
+the model and reporting environments. Only the compute file is needed by the
+ExpOps CLI itself; the other files provide the batch driver, dependency constraints
+and project-specific checks used by this walkthrough.
+
+You do not need to clone or upload the fraud repository. `--project local`
+selects the Git mount containing `configs/project_config.yaml`; that configuration
+selects `local/src/model.py`, reporting code and requirement files. ExpOps retrieves
+the source into `.expops-sources/credit-card-fraud`. Here `local` is a namespace
+alias for Git, not a statement that the source was already on local disk.
+
+## 4. Load credentials and confirm Supabase
+
+GCP ADC, the AWS `expops` profile and Git credentials were configured separately
+on the shared cluster home. Load the cloud environment file:
 
 ```bash
-# python -m pip install --no-cache-dir -e "./expops-platform[slurm,aws,gcp,redis]"
-# python -c 'import boto3, dask_jobqueue, expops, redis; from google.cloud import storage; from expops.cluster import ComputeSession; print(expops.__file__)'
+source "$HOME/.config/expops/cloud.env"
+git ls-remote https://github.com/Professional-Procrastinat0r/credit-card-fraud.git \
+  refs/heads/feature/git-s3-gcs-supabase-slurm
 ```
 
-Optional extras can be combined to match any selected metadata/object-store
-pair.
+That file selects the existing GCP ADC and AWS credential/config files. Do not
+copy credentials into the fraud source or compute YAML. A user setting this up
+from scratch must provision their own ADC, AWS profile and Git authentication;
+these existing files are specific to this account. Workers inherit selected
+environment settings and read credential files through shared home storage.
 
-Do not continue until `pip check` and the relevant imports succeed. ExpOps also
-installs the selected storage dependencies into the model and reporting
-environments it constructs, so they do not need to be added to the experiment's
-requirements files solely for backend reconstruction.
-
-## 5. Configure and verify remote storage credentials
-
-Run the PostgreSQL password prompt after each new login. Its name matches the
-explicit `password_ref` in `compute_config.yaml`. Input is hidden and the value
-is not written into shell history:
+Open Supabase Dashboard, choose **Connect -> Session pooler**, and compare its
+host, port, username and database with `storage.metadata.connection` in the YAML:
 
 ```bash
-read -rsp "CREDIT_CARD_FRAUD_SQL_PASSWORD: " CREDIT_CARD_FRAUD_SQL_PASSWORD
+nano compute.git.slurm.yaml
+```
+
+Keep `sslmode: require`. Use the PostgreSQL database password, not a Supabase API
+key. Read it without putting its literal value in the shell command:
+
+```bash
+read -r -s -p "Supabase database password: " CREDIT_CARD_FRAUD_SQL_PASSWORD
 printf '\n'
 export CREDIT_CARD_FRAUD_SQL_PASSWORD
-
-test -n "${CREDIT_CARD_FRAUD_SQL_PASSWORD:-}"
-
-python -c 'import os, psycopg; c=psycopg.connect(host="aws-0-ap-southeast-1.pooler.supabase.com", port=6543, dbname="postgres", user="postgres.dzzzeqtjpdfknbggnotp", password=os.environ["CREDIT_CARD_FRAUD_SQL_PASSWORD"], sslmode="require", connect_timeout=5); c.execute("SELECT 1").fetchone(); print("PostgreSQL preflight: OK"); c.close()'
 ```
 
-For the commented Redis alternative, use its independently selected environment
-reference:
+The reference `CREDIT_CARD_FRAUD_SQL_PASSWORD` in YAML selects this variable.
+SLURM inherits it when you submit the driver job; it is also available to the
+worker metadata clients. Do not unset it before submitting both test runs.
+
+## 5. Check access and optionally retrieve source without running
 
 ```bash
-# read -rsp "CREDIT_CARD_FRAUD_REDIS_PASSWORD: " CREDIT_CARD_FRAUD_REDIS_PASSWORD
-# printf '\n'
-# export CREDIT_CARD_FRAUD_REDIS_PASSWORD
-# test -n "${CREDIT_CARD_FRAUD_REDIS_PASSWORD:-}"
-# python -c 'import os, redis; c=redis.Redis(host="afterthought-cakes-button-30026.db.redis.io", port=17421, db=0, password=os.environ["CREDIT_CARD_FRAUD_REDIS_PASSWORD"], socket_connect_timeout=5); print("Redis preflight:", c.ping()); c.close()'
+"$EXPOPS_PYTHON" deployment.py preflight --compute compute.git.slurm.yaml
 ```
 
-### Google Cloud Storage (active)
+Expected stages: Git model source, S3 CSV size/header, GCS cache write/read,
+GCS artefact write/read, then **Supabase PostgreSQL SELECT 1: OK**. The two tiny
+GCS `_preflight` objects are retained as check evidence; no training runs are
+created. It does not create the application metadata schema.
 
-For the active GCS backend, use Application Default Credentials that
-are readable at the same path on the login node and workers. If you must use a
-credential JSON file, keep it outside the project and upload it separately from
-the code archive. Run this locally in PowerShell. This uses one cluster
-connection instead of separate setup, upload, and verification connections:
+To check only files while diagnosing PostgreSQL:
+
+```bash
+"$EXPOPS_PYTHON" deployment.py preflight --compute compute.git.slurm.yaml --files-only
+```
+
+Optionally exercise CLI source retrieval:
+
+```bash
+"$EXPOPS_PYTHON" -m expops.main run --project local \
+  --compute compute.git.slurm.yaml --prepare-only
+ls .expops-sources/credit-card-fraud/configs
+```
+
+`--prepare-only` retrieves project source without submitting workers, building
+environments or connecting to PostgreSQL. The actual run refreshes the named
+source directory while preserving its runtime directory. It does not download
+the S3 training CSV as a prepared local dataset in streaming mode.
+
+## 6. Submit the driver and let ExpOps provision workers
+
+Proceed when database access works:
+
+```bash
+JOB_ID=$(sbatch --parsable --export=ALL run.slurm)
+JOB_ID=${JOB_ID%%;*}
+printf 'Driver job: %s\n' "$JOB_ID"
+squeue -u "$USER"
+tail -F "driver-$JOB_ID.log"
+```
+
+Use Ctrl+C to stop following the log; it does not cancel the job. The driver job
+runs on `xcnc17`. Its preflight checks access from the compute node before invoking:
+
+```bash
+"$EXPOPS_PYTHON" -m expops.main run --project local --compute compute.git.slurm.yaml
+```
+
+The SLURM provider submits two additional worker jobs in the configured pool.
+Do not add `--local`: that would replace the requested SLURM provider. Environment
+setup installs the declared model/reporting dependencies, then workers validate
+the CSV, train three models, score nine held-out partitions, aggregate metrics
+and publish the PNG to GCS. Raw CSV bytes stream from S3 into pandas; pandas
+still holds the dataset in memory. Models, spilled payloads and result cache
+objects use GCS; PostgreSQL keeps metadata and cache indices.
+
+The default worker walltime is 30 minutes and driver walltime is one hour. Pending
+jobs can exceed the 10-minute worker startup timeout; increase it deliberately
+if necessary rather than assuming a pending job is a VFS failure.
+
+## 7. Verify the first run and retrieve its report
+
+After the driver exits:
+
+```bash
+sacct -j "$JOB_ID" -X --format=JobID,JobName,State,ExitCode,Elapsed
+grep -E 'Run ID|run_id|Pipeline|Process results|exit status|ERROR|Traceback' "driver-$JOB_ID.log"
+ls -lt .expops-sources/credit-card-fraud/.credit-card-fraud/logs/
+"$EXPOPS_PYTHON" deployment.py inspect --compute compute.git.slurm.yaml
+```
+
+The driver must be `COMPLETED` with `0:0`, and the matching PostgreSQL run must
+be `completed`. Take the run ID from the log or inspection output:
+
+```bash
+RUN_ID="paste-the-first-run-id-here"
+"$EXPOPS_PYTHON" deployment.py inspect --compute compute.git.slurm.yaml \
+  --run-id "$RUN_ID" --download-report reports/first
+```
+
+For a fresh metadata/cache namespace, expect `{"completed": 25}` and one chart
+group. Confirm all 25 process records, not merely the final success line. If
+this namespace was used already, legitimate cache hits can appear on the first
+run. The helper downloads and verifies the published GCS PNG.
+
+From Windows, copy it for viewing:
 
 ```powershell
-$gcpCredentials = 'C:\Users\User\AppData\Roaming\gcloud\application_default_credentials.json'
-$sshTarget = 'e1115319@xlogin.comp.nus.edu.sg'
-$proxyJump = 'e1115319@stujump.comp.nus.edu.sg'
-
-scp -o "ProxyJump=$proxyJump" $gcpCredentials "${sshTarget}:~/.expops-gcp-credentials-upload.json"
-if ($LASTEXITCODE -ne 0) {
-    throw "Google credentials upload failed"
-}
+scp -J e1115319@stujump.comp.nus.edu.sg `
+  e1115319@xlogin.comp.nus.edu.sg:~/fyp-expops/git-s3-gcs-supabase/reports/first/fraud_seed_data_parallel_report.png `
+  .\fraud_seed_data_parallel_report.png
 ```
 
-Then run this in the cluster login session you already use for setup and the
-pipeline. The move and permissions are needed only after uploading a new file;
-the two exports are needed after every new login:
+## 8. Repeat to verify cache reuse
+
+Return to the same directory and keep the same source revision, configuration,
+dataset, credentials and storage prefixes:
 
 ```bash
-mkdir -p "$HOME/.config/expops"
-mv "$HOME/.expops-gcp-credentials-upload.json" \
-  "$HOME/.config/expops/gcp-service-account.json"
-chmod 700 "$HOME/.config/expops"
-chmod 600 "$HOME/.config/expops/gcp-service-account.json"
-
-export GOOGLE_APPLICATION_CREDENTIALS="$HOME/.config/expops/gcp-service-account.json"
-export GOOGLE_CLOUD_PROJECT="exp-ops-506607"
-
-python -c 'from google.cloud import storage; c=storage.Client(); b=c.bucket("expops-example-credit-card-fraud"); o=b.blob("credit-card-fraud/dataset/creditcard.csv"); print("GCS training object visible:", o.exists()); c.close()'
+WARM_JOB_ID=$(sbatch --parsable --export=ALL run.slurm)
+WARM_JOB_ID=${WARM_JOB_ID%%;*}
+tail -F "driver-$WARM_JOB_ID.log"
 ```
 
-The service account should have only the permissions needed for the configured
-bucket. A service-account key is a long-lived secret; use workload identity or
-short-lived credentials instead if the cluster supports them, and delete or
-rotate a temporary test key when it is no longer needed.
+After completion, inspect that run ID exactly as above. Expect `{"cached": 25}`,
+run status `completed`, identical metrics and a retrievable PNG. The controller
+still provisions workers, checks inputs and retrieves source on a warm run;
+cache reuse avoids process recomputation, not all startup or network work.
+Worker jobs cancelled by the controller during normal teardown are expected;
+use the driver exit and pipeline/process records to judge success.
 
-### Amazon S3 (optional mount alternative)
-
-Skip this section for the active all-GCS SLURM profile. The commented S3 alternatives
-select the `expops` profile. If that
-profile is backed by your local AWS shared credentials file, upload only the
-credentials file. The region is already configured in YAML, so a separate AWS
-config file is unnecessary for this case. If the profile does not exist yet,
-first run `aws configure --profile expops` locally, or change the profile name
-in YAML. This PowerShell block makes only one cluster connection:
-
-```powershell
-$awsCredentials = Join-Path $HOME '.aws\credentials'
-$sshTarget = 'e1115319@xlogin.comp.nus.edu.sg'
-$proxyJump = 'e1115319@stujump.comp.nus.edu.sg'
-
-scp -o "ProxyJump=$proxyJump" $awsCredentials "${sshTarget}:~/.expops-aws-credentials-upload"
-if ($LASTEXITCODE -ne 0) {
-    throw "AWS credentials upload failed"
-}
-```
-
-This copies temporary session tokens too when they are present in the shared
-credentials file, but those credentials will stop working when they expire. If
-the profile uses AWS IAM Identity Center (SSO), configure the AWS CLI on the
-cluster and run `aws sso login --profile expops` there instead of copying its
-local SSO cache.
-
-Then run this in the existing cluster login session. The move and permissions
-are needed only after uploading a new file; the exports are needed after every
-new login. Do not copy AWS keys into the repository or project config:
+When finished submitting runs:
 
 ```bash
-mkdir -p "$HOME/.config/expops"
-mv "$HOME/.expops-aws-credentials-upload" \
-  "$HOME/.config/expops/aws-credentials"
-chmod 700 "$HOME/.config/expops"
-chmod 600 "$HOME/.config/expops/aws-credentials"
-
-export AWS_PROFILE="expops"
-export AWS_DEFAULT_REGION="ap-southeast-1"
-export AWS_SHARED_CREDENTIALS_FILE="$HOME/.config/expops/aws-credentials"
-
-python -c 'import boto3; c=boto3.Session(profile_name="expops", region_name="ap-southeast-1").client("s3"); c.head_object(Bucket="expops-test-bucket-755933694771-ap-southeast-1-an", Key="credit-card-fraud/creditcard.csv"); print("S3 training object visible")'
-```
-
-Use the AWS credential block only after activating an S3 mount in
-`compute_config.yaml`. The active input, cache and artefact mounts use GCS.
-These checks must run on a host with the same network policy and shared home
-filesystem used by the worker jobs.
-
-## 6. Submit the pipeline
-
-The project mounts its source as `local` with `access: staged`. ExpOps delivers
-the mounted source to workers; the current model opens the declared training
-input through `context.inputs["training"]` and reads it into memory. Changing the
-input mode to `materialize` also works with this loader. The reserved `cache`
-and `artefact` mounts retain managed output storage. Their new GCS prefixes are
-`credit-card-fraud/vfs/cache` and `credit-card-fraud/vfs/artefact`; a first
-migrated run should be treated as cold.
-
-Keep the driver and worker environment setup consistent. On this shared-home
-cluster, the extracted project and its prepared environments are available at
-the same paths. The platform uses these environment paths when they exist on
-the worker; separate hosts can instead supply `options.worker_python` and
-`options.worker_environments`. These are compute-runtime settings. Mounts
-do not select the database or construct Python environments.
-
-After a new login, reactivate the environment and repeat the exports before
-running ExpOps:
-
-```bash
-cd "$HOME/fyp-expops"
-
-export TMPDIR="$HOME/fyp-expops/.tmp"
-export TMP="$TMPDIR"
-export TEMP="$TMPDIR"
-export JOBLIB_TEMP_FOLDER="$TMPDIR/joblib"
-export PIP_CACHE_DIR="$HOME/fyp-expops/.pip-cache"
-export XDG_CACHE_HOME="$HOME/fyp-expops/.cache"
-export DASK_TEMPORARY_DIRECTORY="$HOME/fyp-expops/.dask"
-export MLOPS_WORKSPACE_DIR="$HOME/fyp-expops"
-export MLOPS_WORKSPACE_BASE_DIR="$HOME/fyp-expops/.workspaces"
-export MLOPS_DATA_MATERIALIZATION_DIR="$HOME/fyp-expops/.materialized-data"
-export MLOPS_WORKSPACE_CLEANUP="always"
-export MLOPS_DASK_WAIT_FOR_WORKERS_SEC="120"
-
-mkdir -p \
-  "$TMPDIR" \
-  "$JOBLIB_TEMP_FOLDER" \
-  "$PIP_CACHE_DIR" \
-  "$XDG_CACHE_HOME" \
-  "$DASK_TEMPORARY_DIRECTORY" \
-  "$MLOPS_WORKSPACE_BASE_DIR" \
-  "$MLOPS_DATA_MATERIALIZATION_DIR"
-
-source .venv/bin/activate
-
-read -rsp "CREDIT_CARD_FRAUD_SQL_PASSWORD: " CREDIT_CARD_FRAUD_SQL_PASSWORD
-printf '\n'
-export CREDIT_CARD_FRAUD_SQL_PASSWORD
-
-# Redis metadata alternative:
-# read -rsp "CREDIT_CARD_FRAUD_REDIS_PASSWORD: " CREDIT_CARD_FRAUD_REDIS_PASSWORD
-# printf '\n'
-# export CREDIT_CARD_FRAUD_REDIS_PASSWORD
-
-# Only for an activated S3 alternative:
-# export AWS_PROFILE="expops"
-# export AWS_DEFAULT_REGION="ap-southeast-1"
-# export AWS_SHARED_CREDENTIALS_FILE="$HOME/.config/expops/aws-credentials"
-
-export GOOGLE_APPLICATION_CREDENTIALS="$HOME/.config/expops/gcp-service-account.json"
-export GOOGLE_CLOUD_PROJECT="exp-ops-506607"
-
-python -c 'import tempfile; print(tempfile.gettempdir())'
-python credit-card-fraud/scripts/inspect_storage_auth.py
-
-expops run credit-card-fraud --compute credit-card-fraud/configs/compute_config.yaml
-run_status=$?
 unset CREDIT_CARD_FRAUD_SQL_PASSWORD
-
-latest_log=$(ls -1t "$HOME/fyp-expops/credit-card-fraud/.credit-card-fraud/logs/"*.log 2>/dev/null | head -n 1)
-printf 'ExpOps exit status: %s\n' "$run_status"
-printf 'Latest log: %s\n' "$latest_log"
-
-if [ -n "$latest_log" ]; then
-  grep -nE ' - ERROR - |Traceback|Process .* failed|pipeline execution completed successfully' "$latest_log"
-fi
 ```
 
-Accept the run only when `run_status` is `0`, the run metadata says `completed`,
-the latest log contains the final success message, and it contains no `ERROR`, traceback, or failed-process line.
-For S3, lowercase Botocore handler names containing words such as
-`redirect_from_error` are debug internals; the ` - ERROR - ` level marker above
-is the meaningful failure check.
+To cancel an active driver, use `scancel "$JOB_ID"` and inspect `squeue -u "$USER"`
+for any remaining worker jobs. Keep the workspaces and GCS objects when comparing
+runs; do not clear cache between the cold and warm tests.
+
+## Release installation and current pain points
+
+The package already declares extras for PostgreSQL, S3, GCS and SLURM. Once the
+correct project is published to PyPI, the normal installation will be a versioned
+`pip install 'expops[postgres,aws,gcp,slurm]==<released-version>'` in a shared venv.
+Until then, pip also accepts a wheel or a commit-pinned Git package URL; see
+[pip VCS support](https://pip.pypa.io/en/stable/topics/vcs-support/). The platform
+commits from this test are local and should not be assumed available through a
+remote Git installation yet.
+
+The main current friction is identifying a pre-release runtime, loading provider
+credentials, confirming database network reachability, constraining SDK versions,
+and collecting run/cache/report evidence through an example helper. A packaged
+runtime and platform-level deployment/status commands could simplify that later.
+The experiment source and CSV already avoid manual archive upload in this flow.

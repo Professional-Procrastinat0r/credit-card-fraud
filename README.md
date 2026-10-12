@@ -58,7 +58,7 @@ The expanded pipeline contains 25 nodes: three training nodes, three held-out pr
 
 | File | Workers | Metadata | Input / cache / artefacts |
 | --- | --- | --- | --- |
-| `configs/project_config.yaml` | Same nested experiment in every deployment | — | Declares mounted scripts, requirements and training input |
+| `configs/project_config.yaml` | Same nested experiment in every deployment | â€” | Declares mounted scripts, requirements and training input |
 | `configs/compute.local.yaml` | Two local Dask workers | Local SQLite | Local files under this project |
 | `configs/compute.cloud.yaml` | Two local Dask workers | PostgreSQL | S3 input, GCS cache/artefacts |
 | `configs/compute_config.yaml` | Two SLURM workers | PostgreSQL | GCS input/cache/artefacts, with commented S3 alternatives |
@@ -204,7 +204,9 @@ For local workers with remote storage, select `-Deployment cloud` in the helper.
 PostgreSQL uses the `CREDIT_CARD_FRAUD_SQL_PASSWORD` environment reference;
 GCS uses Application Default Credentials. The cloud profile selects the
 S3 input store with the AWS `expops` profile and uses GCS for cache/artefacts;
-the SLURM profile uses GCS for all three. Commented Redis metadata,
+the checkout SLURM profile uses GCS for all three. The standalone Git/SLURM
+profile uses S3 input and GCS cache/artefacts with Supabase PostgreSQL.
+Commented Redis metadata,
 S3 input and alternative artefact providers remain available. Activate a complete
 alternative block and install/configure its provider before using it. Credential
 values belong in the environment or provider credential files, not YAML.
@@ -222,8 +224,9 @@ See [slurm.md](slurm.md) for cluster setup, credentials and inline quota
 commands. The full-data local/cloud-storage test on 9 October 2026 completed
 all 25 processes, and its repeated run reused all 25 cached results. The three
 seed branches, nine scoring branches and final PNG were verified. Mounted
-SLURM/remote-worker support exists in the platform; the real fraud-project
-cluster run still needs to be tested.
+SLURM runs with Git/S3/GCS combinations and the full dataset passed on 12 October
+using Redis metadata. This branch's Supabase deployment remains to be verified;
+its currently configured endpoint timed out from the login and compute nodes.
 
 ## Run the same project from Git
 
@@ -238,7 +241,7 @@ expops run --project local --compute compute.git.slurm.yaml
 
 The first command retrieves the project without starting workers, building
 environments or opening the metadata database. The second executes it and needs
-the SLURM/storage setup in [slurm.md](slurm.md#git-mount-deploy-with-only-a-compute-file).
+the SLURM/storage setup in [slurm.md](slurm.md).
 To test with local Dask workers first, add `--local` to the second command; this
 keeps the same remote storage settings.
 
@@ -247,13 +250,13 @@ configuration, scripts, requirements and nested parallel experiment are the
 same as for a local checkout. `--project local` selects that mount; it is not a
 local folder name. ExpOps retrieves `configs/project_config.yaml` from Git. No
 separate project configuration or source archive is needed on the driver. The
-profile pins source commit `46d5ad03ef6fbddb5e3bf1e9c373d18f654b6ee3`; update
+profile pins source commit `8e76706f5394483d82126dbab671e4ec92639cf3`; update
 `storage.mounts.local.revision` deliberately when testing newer project code.
 
 This fetches the fraud project only. Install a VFS-capable ExpOps platform
 separately, keep Git on `PATH`, and configure the selected storage credentials.
-The dataset remains in object storage. Source preparation has been tested;
-execution on the real SLURM cluster remains to be validated.
+The dataset remains in S3. Follow [slurm.md](slurm.md) to check credentials,
+submit the driver, verify PostgreSQL process records and compare a warm run.
 
 ## Historical results before VFS migration
 
@@ -298,7 +301,7 @@ Run ID: project-credit-card-fraud-20260824182212-eaf57918
 | Mean | 0.716466 | 0.977560 | 0.061070 | 0.921769 | 0.114549 | 2.5965% |
 | Population std. | 0.012872 | 0.006633 | 0.000557 | 0.020967 | 0.001141 | 0.0353 pp |
 
-Average precision changes noticeably across the three holdout samples, while precision, F1, and alert rate remain comparatively stable. Recall ranges from about 89.8% to 94.9%. The broad operational conclusion is therefore stable—threshold `0.5` catches most frauds but produces many false alerts—although a single split understates uncertainty in recall and ranking quality.
+Average precision changes noticeably across the three holdout samples, while precision, F1, and alert rate remain comparatively stable. Recall ranges from about 89.8% to 94.9%. The broad operational conclusion is therefore stableâ€”threshold `0.5` catches most frauds but produces many false alertsâ€”although a single split understates uncertainty in recall and ranking quality.
 
 The generated report is stored as `fraud_seed_report.png` under the run's ExpOps artifact directory.
 
