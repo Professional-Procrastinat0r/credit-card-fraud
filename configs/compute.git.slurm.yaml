@@ -29,31 +29,34 @@ options:
 # into independent plans with independent ownership and lifecycles.
 storage:
   metadata:
-    type: sql
-    dialect: postgresql
+    type: redis
     password_ref:
       source: environment
-      name: CREDIT_CARD_FRAUD_SQL_PASSWORD
+      name: CREDIT_CARD_FRAUD_REDIS_PASSWORD
       required: true
-    connection:
-      host: aws-0-ap-southeast-1.pooler.supabase.com
-      # Session pooler: confirm the endpoint in Supabase Dashboard -> Connect.
-      port: 5432
-      database: postgres
-      username: postgres.dzzzeqtjpdfknbggnotp
-      options:
-        sslmode: require
-        connect_timeout: 10
+    # The batch driver writes a per-job compute file with its allocated cluster
+    # IP and a free port before ExpOps resolves this plan for all workers.
+    host: 127.0.0.1
+    port: 6379
+    db: 0
+    namespace_prefix: mlops:slurm-git-s3-gcs-redis
+    connection_timeout: 5.0
 
-    # type: redis
+    # PostgreSQL alternative: replace the active Redis block completely.
+    # type: sql
+    # dialect: postgresql
     # password_ref:
     #   source: environment
-    #   name: CREDIT_CARD_FRAUD_REDIS_PASSWORD
+    #   name: CREDIT_CARD_FRAUD_SQL_PASSWORD
     #   required: true
-    # host: afterthought-cakes-button-30026.db.redis.io
-    # port: 17421
-    # db: 0
-    # connection_timeout: 5.0
+    # connection:
+    #   host: aws-0-ap-southeast-1.pooler.supabase.com
+    #   port: 5432
+    #   database: postgres
+    #   username: postgres.dzzzeqtjpdfknbggnotp
+    #   options:
+    #     sslmode: require
+    #     connect_timeout: 10
 
   # Keep the project's local/... paths while obtaining their files from Git.
   mounts:
@@ -70,14 +73,14 @@ storage:
     cache:
       type: gcs
       bucket: expops-example-credit-card-fraud
-      prefix: credit-card-fraud/slurm-git-s3-supabase/cache
+      prefix: credit-card-fraud/slurm-git-s3-redis/cache
       gcp_project: exp-ops-506607
       policy:
         ttl_hours: 24
     artefact:
       type: gcs
       bucket: expops-example-credit-card-fraud
-      prefix: credit-card-fraud/slurm-git-s3-supabase/artefact
+      prefix: credit-card-fraud/slurm-git-s3-redis/artefact
       gcp_project: exp-ops-506607
       # S3 artefact alternative: replace this mount with the following provider.
       # type: s3

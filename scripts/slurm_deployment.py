@@ -1,4 +1,4 @@
-"""Checks and run inspection for the standalone Git/S3/GCS/SQL deployment."""
+"""Checks and run inspection for standalone Git/S3/GCS deployments."""
 from argparse import ArgumentParser
 from collections import Counter
 import json
@@ -37,13 +37,35 @@ def preflight(compute, files_only):
             assert fs.read_bytes(path) == b"expops-deployment-check\n"
             print("GCS", mount, "write/read: OK", flush=True)
     if files_only:
-        print("Filesystem checks passed; PostgreSQL was not checked.")
+        print("Filesystem checks passed; metadata was not checked.")
+        return
+    plan = storage_plan(compute)
+    from expops.storage.secrets import StorageCredentialContext
+    credentials = StorageCredentialContext.from_environment()
+    if plan.metadata_spec.to_dict()['type'] == 'redis':
+        import redis
+        spec = plan.metadata_spec
+        client = redis.Redis(host=spec.host, port=spec.port, db=spec.db,
+                             password=credentials.resolve(spec.password_ref),
+                             socket_connect_timeout=spec.connection_timeout,
+                             socket_timeout=spec.connection_timeout)
+        key = spec.namespace_prefix + ':_preflight:' + uuid.uuid4().hex
+        try:
+            if not client.ping():
+                raise RuntimeError('Redis PING failed')
+            if not client.set(key, 'expops-check', ex=60, nx=True):
+                raise RuntimeError('Redis preflight write failed')
+            if client.get(key) != b'expops-check':
+                raise RuntimeError('Redis preflight read failed')
+            if client.delete(key) != 1:
+                raise RuntimeError('Redis preflight cleanup failed')
+            print('Redis authenticated PING and write/read/delete: OK', flush=True)
+        finally:
+            client.close()
         return
     from sqlalchemy import create_engine, text
     from expops.storage.backends.sqlalchemy import sqlalchemy_url_from_spec
-    from expops.storage.secrets import StorageCredentialContext
-    plan = storage_plan(compute)
-    engine = create_engine(sqlalchemy_url_from_spec(plan.metadata_spec, StorageCredentialContext.from_environment()))
+    engine = create_engine(sqlalchemy_url_from_spec(plan.metadata_spec, credentials))
     try:
         with engine.connect() as connection:
             assert connection.execute(text("SELECT 1")).scalar() == 1
@@ -52,12 +74,17 @@ def preflight(compute, files_only):
         engine.dispose()
 
 
-def inspect_run(compute, run_id, output):
+def inspect_run(compute, run_id, output, save_summary=None):
     from expops.storage.factory import create_storage_session_from_plan
     from expops.storage.managed_references import ManagedObjectRef, read_managed_object
     plan = storage_plan(compute)
     with create_storage_session_from_plan(plan) as session:
         metadata = session.metadata_store
+        if run_id == 'latest':
+            runs = metadata.list_runs(1)
+            if not runs:
+                raise ValueError('No runs were found')
+            run_id = runs[0]
         if not run_id:
             print(json.dumps({run: metadata.get_run_status(run) for run in metadata.list_runs(10)}, indent=2))
             return
@@ -67,11 +94,17 @@ def inspect_run(compute, run_id, output):
         records = {key: value for key, value in metadata.list_run_steps(run_id).items()
                    if key.endswith(".__process__")}
         charts = metadata.list_run_charts(run_id)
-        print(json.dumps({"run_id": run_id, "status": status,
+        summary = {"run_id": run_id, "status": status,
                           "processes": dict(Counter(row.get("status", "unknown") for row in records.values())),
                           "chart_groups": len(charts),
                           "summary_metrics": metadata.get_probe_metrics_by_path(
-                              run_id, "//process[@name='aggregate_seed_data_metrics']")}, indent=2))
+                              run_id, "//process[@name='aggregate_seed_data_metrics']"),
+                          "process_records": records, "charts": charts}
+        print(json.dumps({key: value for key, value in summary.items()
+                          if key not in ('process_records', 'charts')}, indent=2))
+        if save_summary:
+            save_summary.parent.mkdir(parents=True, exist_ok=True)
+            save_summary.write_text(json.dumps(summary, indent=2), encoding='utf-8')
         if output:
             output.mkdir(parents=True, exist_ok=True)
             for chart in charts.values():
@@ -92,13 +125,14 @@ def main():
     inspect.add_argument("--compute", type=Path, required=True)
     inspect.add_argument("--run-id")
     inspect.add_argument("--download-report", type=Path)
+    inspect.add_argument("--save-summary", type=Path)
     args = parser.parse_args()
     try:
         compute = args.compute.resolve()
         if args.command == "preflight":
             preflight(compute, args.files_only)
         else:
-            inspect_run(compute, args.run_id, args.download_report)
+            inspect_run(compute, args.run_id, args.download_report, args.save_summary)
     except Exception as error:
         # Do not dump credential-bearing SQL URLs or provider exceptions.
         raise SystemExit("Deployment check failed (" + type(error).__name__ +
