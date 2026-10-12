@@ -13,11 +13,13 @@ options:
   worker_memory: "4GB"
   worker_processes: 1
   walltime: "00:30:00"
+  startup_timeout_sec: 600
 
   # Values reported by sacctmgr on xlogin2.
   job_extra:
     - "--account=allusers"
     - "--qos=normal"
+    - "--nodelist=xcnc[17-19]"
 
   # Keep both workers eligible for the same node during the smoke run. We can
   # enable node spreading later when measuring multi-node scaling.
@@ -35,11 +37,13 @@ storage:
       required: true
     connection:
       host: aws-0-ap-southeast-1.pooler.supabase.com
-      port: 6543 # Use this for NUS VPN
+      # Session pooler: confirm the endpoint in Supabase Dashboard -> Connect.
+      port: 5432
       database: postgres
       username: postgres.dzzzeqtjpdfknbggnotp
       options:
         sslmode: require
+        connect_timeout: 10
 
     # type: redis
     # password_ref:
@@ -56,29 +60,24 @@ storage:
     local:
       type: git
       repository: https://github.com/Professional-Procrastinat0r/credit-card-fraud.git
-      revision: 46d5ad03ef6fbddb5e3bf1e9c373d18f654b6ee3
+      revision: 8e76706f5394483d82126dbab671e4ec92639cf3
     input:
-      type: gcs
-      bucket: expops-example-credit-card-fraud
+      type: s3
+      bucket: expops-test-bucket-755933694771-ap-southeast-1-an
       prefix: credit-card-fraud/dataset
-      gcp_project: exp-ops-506607
-      # S3 input alternative: replace this mount with the following provider.
-      # type: s3
-      # bucket: expops-test-bucket-755933694771-ap-southeast-1-an
-      # prefix: credit-card-fraud
-      # region: ap-southeast-1
-      # profile: expops
+      region: ap-southeast-1
+      profile: expops
     cache:
       type: gcs
       bucket: expops-example-credit-card-fraud
-      prefix: credit-card-fraud/vfs/cache
+      prefix: credit-card-fraud/slurm-git-s3-supabase/cache
       gcp_project: exp-ops-506607
       policy:
         ttl_hours: 24
     artefact:
       type: gcs
       bucket: expops-example-credit-card-fraud
-      prefix: credit-card-fraud/vfs/artefact
+      prefix: credit-card-fraud/slurm-git-s3-supabase/artefact
       gcp_project: exp-ops-506607
       # S3 artefact alternative: replace this mount with the following provider.
       # type: s3
