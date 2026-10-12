@@ -20,8 +20,8 @@
     "bytes": 14
   },
   "vfs-slurm-fixtures/data/samples.csv": {
-    "sha256": "62fd3449e14b19e1570ed9e34d8ffa4f71cb9bde0898391516cf37d6e18e6174",
-    "bytes": 43
+    "sha256": "8c56c0adbbf725198c08ee8c1bcb44394c647afeede8bcfe9a3400e215daf64f",
+    "bytes": 14
   },
   "vfs-slurm-fixtures/deploy-data-seed-materialize/configs/project_config.yaml": {
     "sha256": "50cbf4e89871d11a5d89e0317230f421e51ebd87c230e3ba851f86ffbc0ed1dd",
