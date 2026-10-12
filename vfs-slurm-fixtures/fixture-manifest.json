@@ -1,4 +1,12 @@
 {
+  "vfs-slurm-fixtures/fraud/requirements.txt": {
+    "sha256": "292ca62981de6fee84591328680269280f062a9e141fdfd96db4e51750db37e7",
+    "bytes": 61
+  },
+  "vfs-slurm-fixtures/fraud/requirements-charts.txt": {
+    "sha256": "48ee9dbf164ec7438470efa7b3847688dc1010a88d020a7777ace4934c1fcace",
+    "bytes": 19
+  },
   "vfs-slurm-fixtures/data/fraud-small.csv": {
     "sha256": "7739a96af4af44ef79f4cfffddbdc65a755b982751c81a7e601dd2216ea03960",
     "bytes": 861877
@@ -12,16 +20,44 @@
     "bytes": 14
   },
   "vfs-slurm-fixtures/data/samples.csv": {
-    "sha256": "e5120100ae7a8a0256cb19642308b66d89bede97c8d73cd95e53889bd6869bb7",
-    "bytes": 41
+    "sha256": "62fd3449e14b19e1570ed9e34d8ffa4f71cb9bde0898391516cf37d6e18e6174",
+    "bytes": 43
   },
-  "vfs-slurm-fixtures/fraud/requirements-charts.txt": {
-    "sha256": "48ee9dbf164ec7438470efa7b3847688dc1010a88d020a7777ace4934c1fcace",
-    "bytes": 19
+  "vfs-slurm-fixtures/deploy-data-seed-materialize/configs/project_config.yaml": {
+    "sha256": "50cbf4e89871d11a5d89e0317230f421e51ebd87c230e3ba851f86ffbc0ed1dd",
+    "bytes": 1172
   },
-  "vfs-slurm-fixtures/fraud/requirements.txt": {
-    "sha256": "292ca62981de6fee84591328680269280f062a9e141fdfd96db4e51750db37e7",
-    "bytes": 61
+  "vfs-slurm-fixtures/deploy-fraud-materialize/configs/project_config.yaml": {
+    "sha256": "124e1d7301a1365e29eb019630cc7c512b239fa05976ad56ccbb182be66985ab",
+    "bytes": 2373
+  },
+  "vfs-slurm-fixtures/deploy-data-stream/configs/project_config.yaml": {
+    "sha256": "2b3041153a1c25e5bd12e2514e82a57635b95cf8fa9a61ffc24ca57200d76748",
+    "bytes": 941
+  },
+  "vfs-slurm-fixtures/deploy-data-materialize/configs/project_config.yaml": {
+    "sha256": "b370ecaff8bc1db0a4a7df3b5ad5b063124f9cadcf9e5dccf1f82ca1d99fc0cb",
+    "bytes": 946
+  },
+  "vfs-slurm-fixtures/deploy-seed-data-stream/configs/project_config.yaml": {
+    "sha256": "4259f715401edee832b41eb5581591ba7b20804faf21d4bfbed152389fc1a64a",
+    "bytes": 1167
+  },
+  "vfs-slurm-fixtures/deploy-data-seed-stream/configs/project_config.yaml": {
+    "sha256": "58a029439d50c517c4c09ef3193c9bc2995f78c641be49b22a891429d260192c",
+    "bytes": 1167
+  },
+  "vfs-slurm-fixtures/deploy-fraud-stream/configs/project_config.yaml": {
+    "sha256": "51a0d49d71391f7b312e6901f3c0dfc0cfc084a9169de713e6e89f00570066be",
+    "bytes": 2368
+  },
+  "vfs-slurm-fixtures/deploy-seed-stream/configs/project_config.yaml": {
+    "sha256": "ca428cec5c842cbd27d5eb9b09248d7db69ce74df07790abe31cddeb2a2461a8",
+    "bytes": 926
+  },
+  "vfs-slurm-fixtures/deploy-seed-materialize/configs/project_config.yaml": {
+    "sha256": "ca474f8623a228fdea1b2b40820a8438964a973acfd8a483425c98885923c541",
+    "bytes": 931
   },
   "vfs-slurm-fixtures/parallel/src/helper.py": {
     "sha256": "95d9811ca5419a63c3add753d6bc35fef2ec8840ddb83395220de0af7a22cd10",
@@ -35,52 +71,16 @@
     "sha256": "1731096865781cc0f385c2f33701ff8ec8bcc6e58ddec2267867c5d3684f1592",
     "bytes": 722
   },
-  "vfs-slurm-fixtures/fraud/src/model.py": {
-    "sha256": "9e0a91bf9eaab2365c640778926ebd617170fed89f9a0720602782bee0c06c46",
-    "bytes": 27404
-  },
   "vfs-slurm-fixtures/fraud/src/plot_metrics.py": {
     "sha256": "a2b7e79489917c62d97becd70868948c951e96c4cb6235d5a22bd3bc51d8cb37",
     "bytes": 29889
   },
-  "vfs-slurm-fixtures/deploy-seed-stream/configs/project_config.yaml": {
-    "sha256": "ca428cec5c842cbd27d5eb9b09248d7db69ce74df07790abe31cddeb2a2461a8",
-    "bytes": 926
-  },
-  "vfs-slurm-fixtures/deploy-seed-materialize/configs/project_config.yaml": {
-    "sha256": "ca474f8623a228fdea1b2b40820a8438964a973acfd8a483425c98885923c541",
-    "bytes": 931
-  },
-  "vfs-slurm-fixtures/deploy-seed-data-stream/configs/project_config.yaml": {
-    "sha256": "4259f715401edee832b41eb5581591ba7b20804faf21d4bfbed152389fc1a64a",
-    "bytes": 1167
+  "vfs-slurm-fixtures/fraud/src/model.py": {
+    "sha256": "9e0a91bf9eaab2365c640778926ebd617170fed89f9a0720602782bee0c06c46",
+    "bytes": 27404
   },
   "vfs-slurm-fixtures/deploy-seed-data-materialize/configs/project_config.yaml": {
     "sha256": "b51f74bacb0513beacab07935a78741052a956a64dc464677554a092488420fd",
     "bytes": 1172
-  },
-  "vfs-slurm-fixtures/deploy-fraud-stream/configs/project_config.yaml": {
-    "sha256": "51a0d49d71391f7b312e6901f3c0dfc0cfc084a9169de713e6e89f00570066be",
-    "bytes": 2368
-  },
-  "vfs-slurm-fixtures/deploy-fraud-materialize/configs/project_config.yaml": {
-    "sha256": "124e1d7301a1365e29eb019630cc7c512b239fa05976ad56ccbb182be66985ab",
-    "bytes": 2373
-  },
-  "vfs-slurm-fixtures/deploy-data-stream/configs/project_config.yaml": {
-    "sha256": "2b3041153a1c25e5bd12e2514e82a57635b95cf8fa9a61ffc24ca57200d76748",
-    "bytes": 941
-  },
-  "vfs-slurm-fixtures/deploy-data-seed-stream/configs/project_config.yaml": {
-    "sha256": "58a029439d50c517c4c09ef3193c9bc2995f78c641be49b22a891429d260192c",
-    "bytes": 1167
-  },
-  "vfs-slurm-fixtures/deploy-data-seed-materialize/configs/project_config.yaml": {
-    "sha256": "50cbf4e89871d11a5d89e0317230f421e51ebd87c230e3ba851f86ffbc0ed1dd",
-    "bytes": 1172
-  },
-  "vfs-slurm-fixtures/deploy-data-materialize/configs/project_config.yaml": {
-    "sha256": "b370ecaff8bc1db0a4a7df3b5ad5b063124f9cadcf9e5dccf1f82ca1d99fc0cb",
-    "bytes": 946
   }
 }
