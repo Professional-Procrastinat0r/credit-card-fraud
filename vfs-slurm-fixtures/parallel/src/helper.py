@@ -2,4 +2,4 @@
 
 
 def model_factor(seed):
-    return seed + 2
+    return seed + 3
