@@ -1,1 +1,2 @@
 vfs-slurm-fixtures/** text eol=lf
+vfs-slurm-fixtures/git-features/fraud-lfs.csv filter=lfs diff=lfs merge=lfs -text

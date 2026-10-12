@@ -1,0 +1,3 @@
+[submodule "vfs-upstream"]
+	path = vfs-slurm-fixtures/git-features/upstream
+	url = https://github.com/Professional-Procrastinat0r/credit-card-fraud.git
