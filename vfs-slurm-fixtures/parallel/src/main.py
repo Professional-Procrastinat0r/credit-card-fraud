@@ -11,7 +11,7 @@ from helper import model_factor
 from expops.core import log_metric, process
 from expops.core.runtime.custom_model_base import MLOpsCustomModelBase
 
-SOURCE_OFFSET = 0
+SOURCE_OFFSET = 10
 
 
 class ScalingModel(MLOpsCustomModelBase):

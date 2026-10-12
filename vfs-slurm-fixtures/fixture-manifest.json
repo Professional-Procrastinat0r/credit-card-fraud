@@ -64,8 +64,8 @@
     "bytes": 108
   },
   "vfs-slurm-fixtures/parallel/src/main.py": {
-    "sha256": "dacaa5db258c08d4fb62809f083ebde773da67f201f44eff8da06f5d0bc79ec3",
-    "bytes": 2836
+    "sha256": "70278c588497ae9f3f35637adc83ff8d562fb3b294719aa5606c0a96b041d00a",
+    "bytes": 2837
   },
   "vfs-slurm-fixtures/parallel/src/report.py": {
     "sha256": "1731096865781cc0f385c2f33701ff8ec8bcc6e58ddec2267867c5d3684f1592",
