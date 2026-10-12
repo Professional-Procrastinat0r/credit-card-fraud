@@ -1,0 +1,82 @@
+data:
+  inputs:
+    training:
+      mode: stream
+      path: input/vfs-slurm-fixtures/data/fraud-small.csv
+environment:
+  vfs-combined-model:
+    venv:
+    - deps/vfs-slurm-fixtures/fraud/requirements.txt
+  vfs-combined-reporting:
+    venv:
+    - deps/vfs-slurm-fixtures/fraud/requirements-charts.txt
+experiment:
+  pipeline:
+    process_adjlist: 'validate_data seed_parallel
+
+      seed_parallel train_model
+
+      train_model prepare_evaluation_data
+
+      prepare_evaluation_data data_parallel
+
+      data_parallel evaluate_partition
+
+      evaluate_partition aggregate_partition_metrics
+
+      aggregate_partition_metrics aggregate_seed_data_metrics
+
+      aggregate_seed_data_metrics plot_seed_data_parallel_metrics
+
+      '
+    processes:
+    - environment: vfs-combined-model
+      name: validate_data
+    - description: Fan out training and held-out evaluation by split seed
+      name: seed_parallel
+      seed_parallelism:
+        seeds:
+        - 41
+        - 42
+        - 43
+    - environment: vfs-combined-model
+      name: train_model
+      parameters:
+        class_weight: balanced
+        max_iter: 1000
+        test_size: 0.2
+    - environment: vfs-combined-model
+      name: prepare_evaluation_data
+    - data_parallelism:
+        data_name: evaluation_rows
+        size: 3
+      description: Split held-out rows into three scoring partitions
+      name: data_parallel
+    - environment: vfs-combined-model
+      name: evaluate_partition
+      parameters:
+        threshold: 0.5
+    - code: main.aggregate_partition_metrics
+      data_aggregation: true
+      environment: vfs-combined-model
+      name: aggregate_partition_metrics
+    - code: main.aggregate_seed_data_metrics
+      environment: vfs-combined-model
+      name: aggregate_seed_data_metrics
+      seed_aggregation: true
+    - chart_type: static
+      code: reporting.plot_seed_data_parallel_metrics
+      environment: vfs-combined-reporting
+      name: plot_seed_data_parallel_metrics
+      probe_paths:
+        combined_summary: //process[@name='aggregate_seed_data_metrics']
+      type: chart
+metadata:
+  description: Credit-card fraud detection nested seed and data parallelism
+  name: vfs-backend-fraud
+  version: 0.5.0
+reproducibility:
+  random_seed: 42
+scripts:
+  main: source/vfs-slurm-fixtures/fraud/src/model.py
+  reporting: reports/vfs-slurm-fixtures/fraud/src/plot_metrics.py

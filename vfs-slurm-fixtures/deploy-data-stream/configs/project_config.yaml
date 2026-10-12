@@ -1,0 +1,44 @@
+data:
+  inputs:
+    samples:
+      mode: stream
+      path: input/vfs-slurm-fixtures/data/samples.csv
+environment:
+  system: {}
+experiment:
+  pipeline:
+    process_adjlist: 'load partitions
+
+      partitions train
+
+      train evaluate
+
+      evaluate aggregate_data
+
+      aggregate_data report'
+    processes:
+    - code: main.load
+      name: load
+    - data_parallelism:
+        data_name: rows
+        size: 2
+      name: partitions
+    - code: main.train
+      name: train
+    - code: main.evaluate
+      name: evaluate
+    - code: main.aggregate
+      data_aggregation: true
+      name: aggregate_data
+    - code: reporting.report
+      name: report
+      probe_paths:
+        summary: //process[@name='aggregate_data']
+      type: chart
+metadata:
+  name: vfs-backend-data
+reproducibility:
+  random_seed: 0
+scripts:
+  main: source/vfs-slurm-fixtures/parallel/src/main.py
+  reporting: reports/vfs-slurm-fixtures/parallel/src/report.py

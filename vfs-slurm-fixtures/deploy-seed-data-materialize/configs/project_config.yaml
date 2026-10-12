@@ -1,0 +1,56 @@
+data:
+  inputs:
+    samples:
+      mode: materialize
+      path: input/vfs-slurm-fixtures/data/samples.csv
+environment:
+  system: {}
+experiment:
+  pipeline:
+    process_adjlist: 'load seeds
+
+      seeds train
+
+      train partitions
+
+      partitions evaluate
+
+      evaluate aggregate_data
+
+      aggregate_data aggregate_seed
+
+      aggregate_seed report'
+    processes:
+    - code: main.load
+      name: load
+    - name: seeds
+      seed_parallelism:
+        seeds:
+        - -3
+        - 7
+    - code: main.train
+      name: train
+    - data_parallelism:
+        data_name: rows
+        size: 2
+      name: partitions
+    - code: main.evaluate
+      name: evaluate
+    - code: main.aggregate
+      data_aggregation: true
+      name: aggregate_data
+    - code: main.aggregate
+      name: aggregate_seed
+      seed_aggregation: true
+    - code: reporting.report
+      name: report
+      probe_paths:
+        summary: //process[@name='aggregate_seed']
+      type: chart
+metadata:
+  name: vfs-backend-seed-data
+reproducibility:
+  random_seed: 0
+scripts:
+  main: source/vfs-slurm-fixtures/parallel/src/main.py
+  reporting: reports/vfs-slurm-fixtures/parallel/src/report.py
