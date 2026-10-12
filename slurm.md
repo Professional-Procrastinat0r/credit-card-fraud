@@ -1,94 +1,115 @@
 # Git source, S3 input and GCS outputs on SLURM
 
-This deployment uses the current 25-process nested fraud experiment with
-streaming training input and Redis metadata inside the driver allocation. It needs an installed
-ExpOps runtime and credentials, but no existing fraud checkout or local CSV.
+This deployment runs the 25-process nested fraud experiment with streaming input
+and SQLite metadata. It needs an installed ExpOps runtime and cloud credentials,
+but no existing fraud checkout, local CSV, database server or database password.
 
 | Resource | Location |
 |---|---|
 | Project source | Git commit `8e76706f5394483d82126dbab671e4ec92639cf3` |
 | Training CSV | `s3://expops-test-bucket-755933694771-ap-southeast-1-an/credit-card-fraud/dataset/creditcard.csv` |
-| Cache | `gs://expops-example-credit-card-fraud/credit-card-fraud/slurm-git-s3-redis/cache/` |
-| Artefacts | `gs://expops-example-credit-card-fraud/credit-card-fraud/slurm-git-s3-redis/artefact/` |
-| Metadata | Allocation-owned Redis with snapshots in shared home storage |
+| Cache | `gs://expops-example-credit-card-fraud/credit-card-fraud/slurm-git-s3-sqlite/cache/` |
+| Artefacts | `gs://expops-example-credit-card-fraud/credit-card-fraud/slurm-git-s3-sqlite/artefact/` |
+| Metadata | Node-local SQLite; persistent snapshot at `sqlite-state/metadata.sqlite` |
 
-The deployment branch is `feature/git-s3-gcs-redis-slurm`. It builds on the
-streaming fraud branch without adding the earlier backend-matrix fixture trees.
-After merging, download the same files from `main`. The compute file's Git commit
-pin remains independent of the branch used to download the deployment files;
-update that pin deliberately when you want to execute changed project code.
+The deployment branch is `feature/git-s3-gcs-sqlite-slurm`. After merging, download
+the same files from `main`. The Git source commit pin is independent of the
+branch used to download deployment files. Update that pin deliberately when
+you want to execute changed project code.
 
-## Current deployment
+## SQLite placement and persistence
 
-The latest tested platform source, including the helper-import and environment
-bootstrap fixes, is under `~/fyp-expops/vfs-test-2026-10-12/platform`. The prepared
-interpreter is
-`~/fyp-expops/vfs-test-2026-10-12/cloud-preflight/.venv/bin/python`.
-It imports that source and has the Redis, S3, GCS and SLURM libraries.
-The older `~/fyp-expops/expops-platform` directory is not the current deployment.
-The prepared test environment has no `expops` console script, so the commands
-below use `python -m expops.main` through an explicit interpreter variable.
+The platform uses SQLite WAL. All processes accessing that live database must
+run on one physical host; WAL does not support a network filesystem. See
+[SQLite's WAL requirements](https://sqlite.org/wal.html).
 
-The configured Supabase endpoint timed out from the login and compute nodes.
-Redis Cloud also timed out from `xlogin2` and `xcnc17`/`xcnc18`/`xcnc19`; the older
-commented Redis hostname no longer resolved. These observations do not establish
-the cause of the network restriction. This test therefore runs Redis inside the
-SLURM allocation, as in the earlier combined acceptance.
+The supplied batch driver and both Dask workers request **`xcnc17`**. They are
+separate SLURM jobs on the same node. The driver creates a private database under
+node-local `/var/tmp`, restores the preceding snapshot if present, and records its absolute
+path in `compute.resolved-<job-id>.yaml`. The platform's interpreter handoff and
+worker plans therefore select the same database. Shared home still holds source,
+environments, credentials and workspaces; GCS holds cache bytes and artefacts.
+On this cluster `/dev/shm` is private to each allocation, so separate worker jobs
+cannot share a database there even on the same host. `/var/tmp` is local XFS
+and was verified visible across separate allocations on `xcnc17`.
 
-The batch driver starts an authenticated Redis server on its allocated cluster
-IP and a free port, then exports `MLOPS_REDIS_HOST`, `MLOPS_REDIS_PORT` and the
-generated password before ExpOps resolves the worker plans. It also writes
-`compute.resolved-<job-id>.yaml` with that endpoint, so controller interpreter
-handoff uses the same address. It contains credential references, not passwords.
-A worker does not
-connect to its own localhost. Normal shutdown saves `redis-state/metadata.rdb`;
-the next allocation reloads those cache indices and run records. GCS continues
-to hold cached result bytes and artefacts.
+Before normal job exit, including an ordinary command failure, the driver uses
+SQLite's backup API to save an integrity-checked snapshot atomically into shared
+home. The snapshot uses rollback journaling; it is not the live worker database.
+A file lock prevents two driver allocations from restoring and overwriting the
+same snapshot. Successful backup removes the private node-local directory.
+The next allocation restores metadata and can discover the existing GCS cache.
 
-Keep the same run directory for the cache test. A file lock prevents concurrent
-drivers from using the same Redis state. Redis is stopped at job completion;
-summaries and verified PNGs are exported before shutdown so they remain readable
-afterward. This is a test deployment, not a continuously available metadata
-service. An abrupt kill can lose changes since the last snapshot.
+This choice trades multi-node scaling for a server-free test. To change nodes,
+edit **both** the batch driver and compute file to request the same replacement
+node. Do not broaden the worker node list while retaining SQLite. For workers
+on different physical nodes, choose a reachable network metadata service.
+This is a deployment decision, not a VFS restriction.
 
-Verified on 12 October 2026 using the full 284,807-row S3 CSV:
+The snapshot is saved at exit, not after every process. A hard kill or node loss
+can lose the current allocation's metadata; the previous snapshot remains.
+An unsuccessful backup fails the job and retains the live database for recovery.
+Preserve `sqlite-state` and the cloud objects between cache tests.
+
+The initial `/dev/shm` attempt (`936125`) failed when workers in separate job
+namespaces could not find the producer's metadata. The driver preserved its
+failed-run snapshot. Independent allocations then confirmed that `/var/tmp`
+is visible across jobs while `/dev/shm` is isolated. The supplied driver uses
+the verified `/var/tmp` placement.
+
+Verified on 12 October 2026 with the full 284,807-row S3 dataset:
 
 | Allocation | Result | Driver elapsed |
 |---|---|---|
-| Cold `936020` | Completed; all 25 processes executed | 7m 27s |
-| New allocation `936044` | Reloaded Redis snapshot; all 25 processes cached | 2m 41s |
+| Cold `936194` | All 25 processes completed; one chart group | 7m 11s |
+| New allocation `936241` | All 25 processes cached; one chart group | 1m 33s |
 
-Both parent jobs exited `0:0`. Metrics and the verified GCS PNG were identical.
-The new allocation used a different port and password, confirming that metadata
-reload preserved cache discovery. Redis was shut down after each job. Access
-to the driver's Redis was also checked from `xcnc18` and `xcnc19`.
-An initial attempt failed because controller handoff used the template localhost
-endpoint; rendering the per-job compute file fixed that deployment error.
-These timings used already prepared project environments after the initial
-attempt built them; a fresh user's first environment setup takes additional time.
+Both drivers exited `0:0`. The second restored the snapshot into a different
+node-local path. Aggregate metrics and the verified GCS PNG were identical;
+they also matched the preceding Redis test. The saved snapshot passed SQLite's
+integrity check. These timings exclude the fresh environment installation done
+during the initial attempt; allow additional time on your first run.
 
-## 1. Connect to the cluster
+That initial setup printed temporary pip dependency warnings before the platform
+dependencies were installed. Dask also reported differing ancillary package
+versions between the outer scheduler and project environment. Those messages
+were not the pipeline failure: the failure was isolated database placement.
+Use the final driver exit code, process records and snapshot check below to
+verify a run rather than treating every log line labelled `ERROR` as fatal.
 
-From your Windows terminal:
+## Current runtime
+
+The tested platform source is under
+`~/fyp-expops/vfs-test-2026-10-12/platform`. The prepared interpreter is
+`~/fyp-expops/vfs-test-2026-10-12/cloud-preflight/.venv/bin/python`.
+It imports that source and has SQLite/SQLAlchemy, S3, GCS and SLURM dependencies.
+The older `~/fyp-expops/expops-platform` is not the current deployment.
+This test venv has no `expops` console script, so use the explicit interpreter
+with `-m expops.main` below.
+
+Hosted PostgreSQL and Redis endpoints timed out from the cluster in earlier
+tests; the cause was not established. This SQLite profile needs neither endpoint
+nor the Redis binary/password used by the preceding allocation-owned Redis test.
+
+## 1. Connect
+
+From Windows PowerShell:
 
 ```powershell
 ssh -J e1115319@stujump.comp.nus.edu.sg e1115319@xlogin.comp.nus.edu.sg
 ```
 
-All following commands are Bash on the cluster unless marked PowerShell.
+All remaining commands are Bash on the cluster unless marked PowerShell.
 
-## 2. Choose the runtime and create an empty run directory
+## 2. Select the runtime and create a run directory
 
 ```bash
 export EXPOPS_PYTHON="$HOME/fyp-expops/vfs-test-2026-10-12/cloud-preflight/.venv/bin/python"
-"$EXPOPS_PYTHON" -c 'import expops, redis, s3fs, gcsfs, dask_jobqueue; print(expops.__file__)'
+"$EXPOPS_PYTHON" -c 'import expops, sqlite3, sqlalchemy, s3fs, gcsfs, dask_jobqueue; print(expops.__file__)'
 "$EXPOPS_PYTHON" -m expops.main run --help
-export EXPOPS_REDIS_SERVER="$HOME/fyp-expops/vfs-test-2026-10-12/redis/usr/bin/redis-server"
-export EXPOPS_REDIS_LIBRARY_DIR="$HOME/fyp-expops/vfs-test-2026-10-12/redis/usr/lib/x86_64-linux-gnu"
-test -x "$EXPOPS_REDIS_SERVER"
 
-mkdir -p "$HOME/fyp-expops/git-s3-gcs-redis"
-cd "$HOME/fyp-expops/git-s3-gcs-redis"
+mkdir -p "$HOME/fyp-expops/git-s3-gcs-sqlite"
+cd "$HOME/fyp-expops/git-s3-gcs-sqlite"
 umask 077
 export TMPDIR="$PWD/tmp" TMP="$PWD/tmp" TEMP="$PWD/tmp"
 export MLOPS_WORKSPACE_BASE_DIR="$PWD/workspaces"
@@ -98,19 +119,19 @@ mkdir -p "$TMPDIR" "$MLOPS_WORKSPACE_BASE_DIR" "$XDG_CACHE_HOME" "$PIP_CACHE_DIR
 quota -s
 ```
 
-The temporary path should be below this run directory. Shared home storage lets
-the driver and workers see the environments, credential files and source delivery.
-The inline redirection avoids this cluster's small per-user `/tmp` quota.
+The temporary path should be below this run directory. The inline redirection
+avoids this cluster's small per-user `/tmp` quota. Only the small live metadata
+database uses node-local `/var/tmp`; datasets and workspaces do not.
 
 For a future release, activate a shared venv containing the released package and
-set `EXPOPS_PYTHON="$(command -v python)"` instead. The installed `expops` command
-is equivalent to `"$EXPOPS_PYTHON" -m expops.main`. Installing the platform does
-not install the fraud experiment; the project controls its own requirements.
+set `EXPOPS_PYTHON="$(command -v python)"`. The installed `expops` command is
+equivalent to `"$EXPOPS_PYTHON" -m expops.main`. Installing the platform does not
+install fraud model/reporting requirements; ExpOps prepares those separately.
 
 ## 3. Download deployment files only
 
 ```bash
-FRAUD_DEPLOY_REF="feature/git-s3-gcs-redis-slurm"
+FRAUD_DEPLOY_REF="feature/git-s3-gcs-sqlite-slurm"
 RAW="https://raw.githubusercontent.com/Professional-Procrastinat0r/credit-card-fraud/$FRAUD_DEPLOY_REF"
 curl --fail --location "$RAW/configs/compute.git.slurm.yaml" -o compute.git.slurm.yaml
 curl --fail --location "$RAW/configs/storage-constraints.txt" -o storage-constraints.txt
@@ -119,37 +140,30 @@ curl --fail --location "$RAW/scripts/slurm_deployment.py" -o deployment.py
 export PIP_CONSTRAINT="$PWD/storage-constraints.txt"
 ```
 
-The constraints keep the storage SDK versions compatible while ExpOps creates
-the model and reporting environments. Only the compute file is needed by the
-ExpOps CLI itself; the other files provide the batch driver, dependency constraints
-and project-specific checks used by this walkthrough.
+The constraints retain storage SDK versions verified together while project
+environments are built. The batch driver handles SQLite placement and snapshots;
+`deployment.py` provides project checks, report retrieval and the backup helper.
 
 You do not need to clone or upload the fraud repository. `--project local`
 selects the Git mount containing `configs/project_config.yaml`; that configuration
-selects `local/src/model.py`, reporting code and requirement files. ExpOps retrieves
-the source into `.expops-sources/credit-card-fraud`. Here `local` is a namespace
-alias for Git, not a statement that the source was already on local disk.
+selects model code, reporting code and requirements. ExpOps retrieves the source
+into `.expops-sources/credit-card-fraud`. Here `local` is a mount alias for Git.
+The S3 dataset is already uploaded, so no dataset upload is needed either.
 
-## 4. Load the existing cloud and Git credentials
+## 4. Load existing cloud and Git credentials
 
 ```bash
 source "$HOME/.config/expops/cloud.env"
 git ls-remote https://github.com/Professional-Procrastinat0r/credit-card-fraud.git \
-  refs/heads/feature/git-s3-gcs-redis-slurm
+  refs/heads/feature/git-s3-gcs-sqlite-slurm
 ```
 
-The cloud file selects the existing GCP ADC and AWS `expops` credential/config
-files. Git uses its existing credential helper. Workers read these files through
-shared home storage. A new user must provision their own credentials separately.
+This uses the existing GCP ADC, AWS `expops` profile and Git credential helper.
+Workers read the credential files through shared home. No database credentials
+or Redis environment variables are required. A fresh user must provision their
+own provider credentials; they do not belong in YAML or source control.
 
-No Supabase or Redis Cloud password is required for this test. The driver creates
-an allocation password and passes it through the configured environment secret
-reference. Password values are not written into source, YAML or Redis config
-files. The `redis-server` binary is separate from the Python `redis` client; both
-already exist in the prepared test environment. A fresh deployment must install
-a server binary or use a reachable managed Redis service instead.
-
-## 5. Check mounted files and optionally retrieve source
+## 5. Check files and optionally retrieve source
 
 ```bash
 "$EXPOPS_PYTHON" deployment.py preflight --compute compute.git.slurm.yaml --files-only
@@ -158,19 +172,16 @@ a server binary or use a reachable managed Redis service instead.
 ls .expops-sources/credit-card-fraud/configs
 ```
 
-The file check reads Git source and the S3 CSV size/header, then writes and reads
-two tiny GCS `_preflight` objects retained as evidence. It starts no training run.
-Use `--files-only` on the login node: metadata is checked inside the allocated
-driver after Redis starts.
+The preflight reads Git source and the S3 CSV size/header, then writes and reads
+two tiny GCS `_preflight` objects retained as evidence. Use `--files-only` on the
+login node: the full metadata check runs inside the allocated driver.
 
-`--prepare-only` retrieves project source without submitting workers, building
-environments or connecting to metadata. The actual run refreshes the named
-source directory while preserving its runtime directory. It does not save a
-prepared raw S3 CSV in streaming mode.
+`--prepare-only` retrieves source without building environments, submitting
+workers or connecting to metadata. Streaming input does not save a raw local
+CSV, though pandas still holds the dataset in memory. Intermediate results,
+models and workspace files can still use disk and GCS.
 
-## 6. Submit the driver and let ExpOps provision workers
-
-Submit from this run directory:
+## 6. Submit the driver
 
 ```bash
 JOB_ID=$(sbatch --parsable --export=ALL run.slurm)
@@ -180,57 +191,59 @@ squeue -u "$USER"
 tail -F "driver-$JOB_ID.log"
 ```
 
-Use Ctrl+C to stop following the log; it does not cancel the job. The driver job
-runs on `xcnc17`, starts Redis and checks authenticated PING plus a temporary
-metadata write/read/delete from that compute node before invoking:
+Ctrl+C stops following the log without cancelling the job. The driver restores
+SQLite, checks the mounted files and database, then invokes:
 
 ```bash
 "$EXPOPS_PYTHON" -m expops.main run --project local --compute "$COMPUTE_CONFIG"
 ```
 
-The SLURM provider submits two additional worker jobs in the configured pool.
-Do not add `--local`: that would replace the requested SLURM provider. Environment
-setup installs the declared model/reporting dependencies, then workers validate
-the CSV, train three models, score nine held-out partitions, aggregate metrics
-and publish the PNG to GCS. Raw CSV bytes stream from S3 into pandas; pandas
-still holds the dataset in memory. Models, spilled payloads and result cache
-objects use GCS; Redis keeps metadata and cache indices.
+ExpOps submits two additional SLURM worker jobs. Do not add `--local`, which
+replaces the selected provider. The model and reporting environments are
+prepared automatically. The pipeline validates the full CSV, trains three
+models, scores nine partitions, aggregates metrics and publishes a PNG to GCS.
 
-The default worker walltime is 30 minutes and driver walltime is one hour. Pending
-jobs can exceed the 10-minute worker startup timeout; increase it deliberately
-if necessary rather than assuming a pending job is a VFS failure.
+The workers have 30-minute walltime and the driver one hour. Pending worker jobs
+can exceed the 10-minute startup timeout; adjust it deliberately if necessary.
 
-## 7. Verify the first run and retrieve its report
+## 7. Verify completion and retrieve the report
 
 After the driver exits:
 
 ```bash
-sacct -j "$JOB_ID" -X --format=JobID,JobName,State,ExitCode,Elapsed
-grep -E 'Pipeline|Process results|exit status|ERROR|Traceback' "driver-$JOB_ID.log"
+sacct -j "$JOB_ID" -X --format=JobID,JobName,State,ExitCode,Elapsed,NodeList
+grep -E 'Pipeline|Process results|exit status|snapshot|ERROR|Traceback' "driver-$JOB_ID.log"
 "$EXPOPS_PYTHON" -m json.tool "results/run-$JOB_ID.json"
-ls -lh redis-state/metadata.rdb
+ls -lh sqlite-state/metadata.sqlite
 ls -lh "results/report-$JOB_ID/fraud_seed_data_parallel_report.png"
+
+"$EXPOPS_PYTHON" - <<'PY'
+import sqlite3
+with sqlite3.connect('file:sqlite-state/metadata.sqlite?mode=ro', uri=True) as db:
+    print('Snapshot integrity:', db.execute('PRAGMA integrity_check').fetchone()[0])
+PY
 ```
 
-The driver must be `COMPLETED` with `0:0`. The summary must have `status: completed`,
-25 process records and one chart group. A fresh state/cache namespace should show
-`{"completed": 25}`. The summary also records metrics and managed chart references.
-Redis is now stopped; use this exported JSON rather than a live metadata query
-from the login node. `metadata.rdb` retains the backing metadata for the next run.
+The driver must be `COMPLETED` with exit code `0:0`. The JSON must show
+`status: completed`, 25 process records and one chart group. An empty metadata
+snapshot starts cold: expect `{"completed": 25}`. Later runs can be cached.
+The exported JSON and verified PNG remain readable after the live database has
+been removed. The saved SQLite snapshot contains metadata for the next run.
+Do not use the per-job resolved config after exit; its node-local DB is gone.
 
-From Windows, copy the report (replace the example job ID):
+From Windows, replace the job ID and copy the report:
 
 ```powershell
 $jobId = "YOUR_DRIVER_JOB_ID"
 scp -J e1115319@stujump.comp.nus.edu.sg `
-  "e1115319@xlogin.comp.nus.edu.sg:~/fyp-expops/git-s3-gcs-redis/results/report-$jobId/fraud_seed_data_parallel_report.png" `
+  "e1115319@xlogin.comp.nus.edu.sg:~/fyp-expops/git-s3-gcs-sqlite/results/report-$jobId/fraud_seed_data_parallel_report.png" `
   .\fraud_seed_data_parallel_report.png
 ```
 
 ## 8. Repeat to verify cache reuse
 
-Keep the same directory, source revision, configuration, dataset, Redis state
-and GCS prefixes. Wait for the first driver to finish:
+Wait for the first job to finish; retain the same run directory, snapshot,
+source revision, dataset and GCS prefixes:
 
 ```bash
 WARM_JOB_ID=$(sbatch --parsable --export=ALL run.slurm)
@@ -238,45 +251,39 @@ WARM_JOB_ID=${WARM_JOB_ID%%;*}
 tail -F "driver-$WARM_JOB_ID.log"
 ```
 
-After completion, inspect and compare both exported summaries:
+After the second job exits:
 
 ```bash
+sacct -j "$WARM_JOB_ID" -X --format=JobID,JobName,State,ExitCode,Elapsed,NodeList
 "$EXPOPS_PYTHON" - "$JOB_ID" "$WARM_JOB_ID" <<'PY'
-import json,sys
+import hashlib, json, sys
 from pathlib import Path
-cold,warm = [json.loads(Path(f"results/run-{job}.json").read_text()) for job in sys.argv[1:]]
-print("Cold:",cold["status"],cold["processes"])
-print("Warm:",warm["status"],warm["processes"])
-assert cold["status"] == warm["status"] == "completed"
-assert warm["processes"] == {"cached":25}
-assert cold["summary_metrics"] == warm["summary_metrics"]
-print("Cache reuse and identical metrics verified")
+cold, warm = [json.loads(Path(f'results/run-{job}.json').read_text()) for job in sys.argv[1:]]
+print('Cold:', cold['status'], cold['processes'])
+print('Warm:', warm['status'], warm['processes'])
+assert cold['status'] == warm['status'] == 'completed'
+assert cold['processes'] == {'completed': 25}
+assert warm['processes'] == {'cached': 25}
+assert cold['summary_metrics'] == warm['summary_metrics']
+reports = [Path(f'results/report-{job}/fraud_seed_data_parallel_report.png') for job in sys.argv[1:]]
+assert len({hashlib.sha256(p.read_bytes()).hexdigest() for p in reports}) == 1
+print('Cache reuse, identical metrics and report verified')
 PY
-ls -lh "results/report-$WARM_JOB_ID/fraud_seed_data_parallel_report.png"
 ```
 
-The second driver reloads the saved Redis metadata, while cached results and
-charts remain in GCS. It generates a new connection password and cluster endpoint;
-neither changes the declared source/input/cache content identity. Startup still
-retrieves source, checks inputs and provisions workers. Expected worker-job
-cancellation during normal teardown does not imply a failed pipeline.
+The new allocation restores metadata into a different node-local pathname;
+cached result objects remain in GCS. Changing this database pathname does not
+change experiment content identity. A cache hit still involves source/input
+checks and worker startup. Worker cancellation during normal teardown does not
+itself indicate a failed pipeline.
 
-To cancel the driver, use `scancel "$JOB_ID"` and check `squeue -u "$USER"` for
-remaining workers. Keep `redis-state`, the run directory and GCS objects when
-comparing runs. Do not clear them between cold and warm tests.
+To cancel a job, use `scancel "$JOB_ID"` and check `squeue -u "$USER"` for remaining
+workers. Preserve the state and cloud objects when comparing cold and warm runs.
 
-## Release installation and current pain points
+## Release installation
 
-The package already declares extras for Redis, S3, GCS and SLURM. Once the
-correct project is published to PyPI, the normal installation will be a versioned
-`pip install 'expops[redis,aws,gcp,slurm]==<released-version>'` in a shared venv.
-Until then, pip also accepts a wheel or a commit-pinned Git package URL; see
-[pip VCS support](https://pip.pypa.io/en/stable/topics/vcs-support/). The platform
-commits from this test are local and should not be assumed available through a
-remote Git installation yet.
-
-The main current friction is identifying a pre-release runtime, loading provider
-credentials, confirming database network reachability, constraining SDK versions,
-and collecting run/cache/report evidence through an example helper. A packaged
-runtime and platform-level deployment/status commands could simplify that later.
-The experiment source and CSV already avoid manual archive upload in this flow.
+Once a VFS-capable version is published to PyPI, installation can use a versioned
+`pip install 'expops[aws,gcp,slurm]==<released-version>'` in a shared venv; SQLite
+support needs no extra database service. Until then, install a platform wheel or
+an available commit-pinned Git package. Do not assume unpublished local platform
+commits are installable from GitHub or PyPI.
