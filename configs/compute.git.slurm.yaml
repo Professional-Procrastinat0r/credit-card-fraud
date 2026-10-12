@@ -22,7 +22,7 @@ options:
     - "--nodelist=xcnc17"
 
   # SQLite WAL requires the driver and all workers on the same physical host.
-  # Match the node requested by scripts/run_git_slurm.sbatch.
+  # Run the driver in an allocation on this same node.
   spread_workers_across_nodes: false
 
 # Deployment resources live in one file, but ExpOps parses compute and storage
@@ -33,10 +33,9 @@ storage:
     dialect: sqlite
     busy_timeout_ms: 30000
     connection:
-      # Persistent snapshot; the batch driver replaces this with an absolute
-      # node-local database path in compute.resolved-<job-id>.yaml.
-      # Run through the supplied batch driver, not directly on the login node.
-      database: sqlite-state/metadata.sqlite
+      # Stable node-local database shared by the driver and workers on xcnc17.
+      # Choose a directory owned by your cluster account when adapting this file.
+      database: /var/tmp/e1115319-expops-credit-card-fraud/metadata.sqlite
 
   # Keep the project's local/... paths while obtaining their files from Git.
   mounts:

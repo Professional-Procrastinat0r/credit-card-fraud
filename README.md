@@ -62,7 +62,7 @@ The expanded pipeline contains 25 nodes: three training nodes, three held-out pr
 | `configs/compute.local.yaml` | Two local Dask workers | Local SQLite | Local files under this project |
 | `configs/compute.cloud.yaml` | Two local Dask workers | PostgreSQL | S3 input, GCS cache/artefacts |
 | `configs/compute_config.yaml` | Two SLURM workers | PostgreSQL | GCS input/cache/artefacts, with commented S3 alternatives |
-| `configs/compute.git.slurm.yaml` | Two SLURM workers and an allocated driver on `xcnc17`; pinned Git project | Node-local SQLite with saved metadata snapshot | S3 input, GCS cache/artefacts |
+| `configs/compute.git.slurm.yaml` | Two SLURM workers; run the driver on `xcnc17`; pinned Git project | Persistent node-local SQLite | S3 input, GCS cache/artefacts |
 
 The default `compute_config.yaml` remains the SLURM deployment. Select the local
 profile explicitly for a local run without cloud credentials. All profiles mount
@@ -227,7 +227,7 @@ seed branches, nine scoring branches and final PNG were verified. Mounted
 SLURM runs with Git/S3/GCS combinations and the full dataset passed on 12 October
 using Redis metadata. Hosted PostgreSQL and Redis endpoints timed out from
 the tested cluster nodes. The current profile uses SQLite instead, pins driver
-and workers to one host, and preserves metadata between allocations. See the
+and workers to one host, and reuses a stable node-local database between runs. See the
 walkthrough for placement, persistence and verification commands.
 
 ## Run the same project from Git
@@ -242,12 +242,18 @@ expops run --project local --compute compute.git.slurm.yaml --prepare-only
 
 This retrieves the project without starting workers, building environments or
 opening the metadata database. For training, follow [slurm.md](slurm.md) and
-submit the supplied driver job. It restores SQLite into node-local storage before
-invoking the normal ExpOps run command, exports summaries and reports, and saves
-a consistent metadata snapshot for the next run. Driver and workers must use
-the same physical node because the platform enables SQLite WAL; do not run
-training directly on the login node with this profile. No database server or
-database credentials are required.
+obtain a standard SLURM allocation on `xcnc17`, then run:
+
+```bash
+expops run --project local --compute compute.git.slurm.yaml
+```
+
+Driver and workers use the same physical node because the platform enables
+SQLite WAL; do not run training directly on the login node with this profile.
+The compute file specifies a stable node-local database path, so a repeated
+command can reuse metadata and GCS cache objects. No custom driver, backup or
+inspection script is required. No database server or database credentials are
+required either.
 
 The Git profile mounts the repository root as `local`, so the project
 configuration, scripts, requirements and nested parallel experiment are the
@@ -260,7 +266,7 @@ profile pins source commit `8e76706f5394483d82126dbab671e4ec92639cf3`; update
 This fetches the fraud project only. Install a VFS-capable ExpOps platform
 separately, keep Git on `PATH`, and configure the selected storage credentials.
 The dataset remains in S3. Follow [slurm.md](slurm.md) to check credentials,
-submit the driver, verify exported SQLite process records and compare a warm run.
+run the ordinary CLI command and compare a warm run.
 
 ## Historical results before VFS migration
 
