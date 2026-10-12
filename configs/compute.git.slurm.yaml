@@ -19,44 +19,24 @@ options:
   job_extra:
     - "--account=allusers"
     - "--qos=normal"
-    - "--nodelist=xcnc[17-19]"
+    - "--nodelist=xcnc17"
 
-  # Keep both workers eligible for the same node during the smoke run. We can
-  # enable node spreading later when measuring multi-node scaling.
+  # SQLite WAL requires the driver and all workers on the same physical host.
+  # Match the node requested by scripts/run_git_slurm.sbatch.
   spread_workers_across_nodes: false
 
 # Deployment resources live in one file, but ExpOps parses compute and storage
 # into independent plans with independent ownership and lifecycles.
 storage:
   metadata:
-    type: redis
-    password_ref:
-      source: environment
-      name: CREDIT_CARD_FRAUD_REDIS_PASSWORD
-      required: true
-    # The batch driver writes a per-job compute file with its allocated cluster
-    # IP and a free port before ExpOps resolves this plan for all workers.
-    host: 127.0.0.1
-    port: 6379
-    db: 0
-    namespace_prefix: mlops:slurm-git-s3-gcs-redis
-    connection_timeout: 5.0
-
-    # PostgreSQL alternative: replace the active Redis block completely.
-    # type: sql
-    # dialect: postgresql
-    # password_ref:
-    #   source: environment
-    #   name: CREDIT_CARD_FRAUD_SQL_PASSWORD
-    #   required: true
-    # connection:
-    #   host: aws-0-ap-southeast-1.pooler.supabase.com
-    #   port: 5432
-    #   database: postgres
-    #   username: postgres.dzzzeqtjpdfknbggnotp
-    #   options:
-    #     sslmode: require
-    #     connect_timeout: 10
+    type: sql
+    dialect: sqlite
+    busy_timeout_ms: 30000
+    connection:
+      # Persistent snapshot; the batch driver replaces this with an absolute
+      # node-local database path in compute.resolved-<job-id>.yaml.
+      # Run through the supplied batch driver, not directly on the login node.
+      database: sqlite-state/metadata.sqlite
 
   # Keep the project's local/... paths while obtaining their files from Git.
   mounts:
@@ -73,14 +53,14 @@ storage:
     cache:
       type: gcs
       bucket: expops-example-credit-card-fraud
-      prefix: credit-card-fraud/slurm-git-s3-redis/cache
+      prefix: credit-card-fraud/slurm-git-s3-sqlite/cache
       gcp_project: exp-ops-506607
       policy:
         ttl_hours: 24
     artefact:
       type: gcs
       bucket: expops-example-credit-card-fraud
-      prefix: credit-card-fraud/slurm-git-s3-redis/artefact
+      prefix: credit-card-fraud/slurm-git-s3-sqlite/artefact
       gcp_project: exp-ops-506607
       # S3 artefact alternative: replace this mount with the following provider.
       # type: s3

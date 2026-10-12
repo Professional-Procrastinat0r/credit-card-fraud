@@ -1,7 +1,9 @@
 """Checks and run inspection for standalone Git/S3/GCS deployments."""
 from argparse import ArgumentParser
 from collections import Counter
+from contextlib import closing
 import json
+import os
 from pathlib import Path
 import socket
 import uuid
@@ -69,7 +71,7 @@ def preflight(compute, files_only):
     try:
         with engine.connect() as connection:
             assert connection.execute(text("SELECT 1")).scalar() == 1
-        print("Supabase PostgreSQL SELECT 1: OK", flush=True)
+        print(plan.metadata_spec.dialect, "metadata SELECT 1: OK", flush=True)
     finally:
         engine.dispose()
 
@@ -115,6 +117,33 @@ def inspect_run(compute, run_id, output, save_summary=None):
                     print("Downloaded verified chart:", path)
 
 
+def sqlite_backup(source, destination, allow_missing=False):
+    """Copy a consistent SQLite snapshot; never run a WAL database over NFS."""
+    import sqlite3
+    source, destination = source.resolve(), destination.resolve()
+    if source == destination:
+        raise ValueError('SQLite backup source and destination must differ')
+    if not source.exists() and not allow_missing:
+        raise FileNotFoundError(source)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_name(destination.name + '.' + uuid.uuid4().hex + '.tmp')
+    try:
+        with closing(sqlite3.connect(temporary)) as target:
+            if source.exists():
+                with closing(sqlite3.connect(source.as_uri() + '?mode=ro', uri=True, timeout=30)) as original:
+                    original.backup(target)
+            # Shared-home snapshots use rollback journaling and are opened only
+            # by the driver under its file lock, never by pipeline workers.
+            assert target.execute('PRAGMA journal_mode=DELETE').fetchone()[0] == 'delete'
+            assert target.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'
+        with temporary.open('r+b') as stream:
+            os.fsync(stream.fileno())
+        temporary.replace(destination)
+        print('SQLite snapshot saved:', destination, flush=True)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def main():
     parser = ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -126,13 +155,18 @@ def main():
     inspect.add_argument("--run-id")
     inspect.add_argument("--download-report", type=Path)
     inspect.add_argument("--save-summary", type=Path)
+    backup = commands.add_parser('sqlite-backup')
+    backup.add_argument('--source', type=Path, required=True)
+    backup.add_argument('--destination', type=Path, required=True)
+    backup.add_argument('--allow-missing', action='store_true')
     args = parser.parse_args()
     try:
-        compute = args.compute.resolve()
-        if args.command == "preflight":
-            preflight(compute, args.files_only)
+        if args.command == 'sqlite-backup':
+            sqlite_backup(args.source, args.destination, args.allow_missing)
+        elif args.command == "preflight":
+            preflight(args.compute.resolve(), args.files_only)
         else:
-            inspect_run(compute, args.run_id, args.download_report, args.save_summary)
+            inspect_run(args.compute.resolve(), args.run_id, args.download_report, args.save_summary)
     except Exception as error:
         # Do not dump credential-bearing SQL URLs or provider exceptions.
         raise SystemExit("Deployment check failed (" + type(error).__name__ +
