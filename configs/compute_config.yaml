@@ -12,11 +12,9 @@ options:
   walltime: "00:45:00"
   startup_timeout_sec: 1800
 
-  # NUS credentials. Set MLOPS_WORKER_PYTHON and MLOPS_WORKER_BASE_DIR for
-  # deployment paths, or supply worker_python/worker_base_dir YAML overrides.
-  # Project environments and the ExpOps worker package are prepared automatically.
-  job_script_prologue:
-    - 'source "$HOME/.config/expops/cloud.env"'
+  # Worker paths and the explicit worker expops.env come from the driver's
+  # expops.env (MLOPS_WORKER_PYTHON / BASE_DIR / ENV_FILE). No shell sourcing.
+  # Named project venvs and the ExpOps worker package are prepared automatically.
 
   # Values reported by sacctmgr on xlogin2.
   job_extra:

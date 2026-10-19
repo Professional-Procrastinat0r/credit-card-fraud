@@ -5,7 +5,7 @@ provider: local
 num_workers: 2
 options:
   materialization:
-    cleanup: always  # always | on_success | never; owned worker source/input copies.
+    cleanup: always  # always | on_success | never; owned driver input and worker source/input copies.
   startup_timeout_sec: 90
   local_cluster_kwargs:
     memory_limit: 0

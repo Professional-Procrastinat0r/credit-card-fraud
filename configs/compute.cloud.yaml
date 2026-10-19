@@ -1,6 +1,6 @@
 # Local workers with S3 input and GCS cache/artefacts.
 # expops run configs/compute.cloud.yaml --local
-# This profile also works as an HTTPS compute URL after publishing these changes.
+# This profile also works as a public HTTPS compute URL.
 # Local model/reporting environments are prepared automatically on this host.
 provider: local
 num_workers: 2
