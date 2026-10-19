@@ -30,7 +30,8 @@ If `expops` is already on PATH, the equivalent command is
 ## SLURM run
 
 Follow [slurm.md](slurm.md) from connection through completion. It contains the
-complete NUS setup and uses these filled-in dotenv examples:
+complete NUS setup, a [busy-node alternative](slurm.md#busy-node-alternative),
+and these filled-in dotenv examples:
 
 - [Local Windows](configs/env/local.windows.env.example): all launcher paths and thread settings.
 - [NUS SLURM driver](configs/env/slurm.env.example): launcher scratch/cache paths,

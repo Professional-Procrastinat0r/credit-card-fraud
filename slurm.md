@@ -14,7 +14,9 @@ From Windows PowerShell:
 ssh -J e1115319@stujump.comp.nus.edu.sg e1115319@xlogin.comp.nus.edu.sg
 ```
 
-On the login node:
+On the login node, use the usual xcnc17 allocation below. If it is busy, use
+the [busy-node alternative](#busy-node-alternative) instead.
+
 
 ```bash
 salloc --partition=normal --account=allusers --qos=normal \
@@ -196,3 +198,32 @@ When changing platform code later, update the driver and base worker installatio
 before running again. This does not require building a wheel manually or
 reinstalling project requirements yourself. See the platform repository for its
 development installation instructions.
+
+## Busy-node alternative
+
+If xcnc17 worker jobs cannot start within the configured 30-minute startup
+window, choose an available host for both driver and workers. For example,
+xcnc42 had capacity during validation on 19 October 2026. Availability changes;
+check the queue before allocating. Changing hosts gives a separate node-local
+SQLite database; records on xcnc17 remain there. The same dotenv settings work.
+
+From the login node, use this allocation **instead of** the xcnc17 allocation:
+
+```bash
+salloc --partition=normal --account=allusers --qos=normal \
+  --nodes=1 --ntasks=1 --cpus-per-task=1 --mem=4G \
+  --time=01:00:00 --nodelist=xcnc42 srun --pty bash
+```
+
+Follow step 2 in that shell, then create a separate compute file and run it:
+
+```bash
+cd /home/e/e1115319/fyp-expops/git-s3-gcs-sqlite
+sed 's/xcnc17/xcnc42/g' compute.git.slurm.yaml > compute.git.slurm.xcnc42.yaml
+/home/e/e1115319/fyp-expops/expops-platform/.venv/bin/python -m expops.main run compute.git.slurm.xcnc42.yaml
+printf 'ExpOps exit code: %s\n' "$?"
+```
+
+Do not run an xcnc17 driver with xcnc42 workers against these node-local SQLite
+paths. Worker scratch and environments are local to the chosen host even though
+the configured `/var/tmp` path text is identical on both hosts.
