@@ -2,9 +2,11 @@
 
 This guide is ready for account `e1115319`. It uses Git code, the existing full
 S3 dataset, GCS cache/reports, and SQLite on xcnc17. The platform installation and
-credential files have already been provisioned. ExpOps loads deployment settings
-from `expops.env`; no shell sourcing, environment exports, venv activation,
-manual project dependency installation or manual wheel build is needed.
+credential files have already been provisioned. Activate the base virtual
+environment once in the driver shell, then run `expops`. ExpOps loads deployment
+settings from `expops.env` and prepares project environments automatically.
+No credential-file sourcing, manual environment exports, project dependency
+installation or manual wheel build is needed.
 
 ## 1. Connect and allocate the driver
 
@@ -112,18 +114,23 @@ necessary. For quota diagnostics, run `quota -s` if the command is available,
 plus `df -h /tmp /var/tmp "$HOME"` and `df -i /tmp /var/tmp "$HOME"`; free global
 disk space alone does not establish your per-user quota.
 
-## 3. Retrieve the project, then run
+## 3. Activate ExpOps, retrieve the project and run
 
-Use the provisioned Python directly, so no activation is needed:
+Activate the provisioned base environment in the allocated driver shell:
 
 ```bash
-/home/e/e1115319/fyp-expops/expops-platform/.venv/bin/python -m expops.main run compute.git.slurm.yaml --prepare-only
-/home/e/e1115319/fyp-expops/expops-platform/.venv/bin/python -m expops.main run compute.git.slurm.yaml
+source /home/e/e1115319/fyp-expops/expops-platform/.venv/bin/activate
+expops run compute.git.slurm.yaml --prepare-only
+expops run compute.git.slurm.yaml
 printf 'ExpOps exit code: %s\n' "$?"
 ```
 
-The first command is an optional source check. The second is the full run. If
-`expops` is already on PATH, `expops run compute.git.slurm.yaml` is equivalent.
+Activation selects the base Python and puts its `expops` command on PATH for
+this shell. Calling that environment's Python directly, as in scripts, is also
+valid. Activation does not load `expops.env`; ExpOps loads that file when invoked.
+Workers still use the base interpreter configured by `MLOPS_WORKER_PYTHON`.
+The `--prepare-only` command is an optional source check; the following command
+performs the full run.
 No `--project` is necessary: `code` is the default project mount. Its source pin
 is `7fdf2ee2d2510e8dbc21677630d65a317dbf4788`, independently of the deployment file.
 A public compute URL can replace the local YAML path without changing dotenv
@@ -155,7 +162,7 @@ The configured process-result cache TTL is 24 hours.
 latest_log=$(ls -t .expops-sources/credit-card-fraud/.credit-card-fraud/logs/*.log | head -n 1)
 grep -E 'Process results:|Pipeline completed successfully' "$latest_log"
 
-/home/e/e1115319/fyp-expops/expops-platform/.venv/bin/python -m expops.main run compute.git.slurm.yaml
+expops run compute.git.slurm.yaml
 printf 'ExpOps exit code: %s\n' "$?"
 ```
 
@@ -221,7 +228,8 @@ Follow step 2 in that shell, then create a separate compute file and run it:
 ```bash
 cd /home/e/e1115319/fyp-expops/git-s3-gcs-sqlite
 sed 's/xcnc17/xcnc42/g' compute.git.slurm.yaml > compute.git.slurm.xcnc42.yaml
-/home/e/e1115319/fyp-expops/expops-platform/.venv/bin/python -m expops.main run compute.git.slurm.xcnc42.yaml
+source /home/e/e1115319/fyp-expops/expops-platform/.venv/bin/activate
+expops run compute.git.slurm.xcnc42.yaml
 printf 'ExpOps exit code: %s\n' "$?"
 ```
 
