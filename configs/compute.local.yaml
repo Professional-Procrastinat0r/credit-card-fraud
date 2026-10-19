@@ -1,9 +1,14 @@
 # Mount sources resolve relative to this file, not the caller's CWD.
+# expops run configs/compute.local.yaml --local
+# Environments are prepared on this host; no remote bootstrap/wheel is needed.
 provider: local
 num_workers: 2
 options:
+  materialization:
+    cleanup: always  # always | on_success | never; owned worker source/input copies.
   startup_timeout_sec: 90
-  worker_memory: 0
+  local_cluster_kwargs:
+    memory_limit: 0
 storage:
   metadata:
     type: sql
@@ -12,9 +17,10 @@ storage:
       # SQLite paths resolve relative to the native project root.
       database: .credit-card-fraud/storage/metadata.db
   mounts:
-    local:
+    code:
       type: local
       source: ..
+      read_only: true
     input:
       type: local
       source: ../data

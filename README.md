@@ -12,12 +12,15 @@ the driver, activating ExpOps, loading credentials, setting writable temporary
 paths, and downloading the compute config. Once those steps are complete, run:
 
 ```bash
-expops run --project local --compute compute.git.slurm.yaml
+expops run compute.git.slurm.yaml
 ```
 
 You only download the compute file. ExpOps retrieves the project from Git,
-reads `configs/project_config.yaml`, prepares its model and reporting Python
-environments, and submits the Dask worker jobs. The dataset already lives in
+reads `configs/project_config.yaml`, prepares launcher environments, and submits
+worker jobs that build their own model and reporting venvs before starting Dask.
+ExpOps prepares and publishes its worker package automatically. Only the base
+bootstrap installation and deployment credentials need provisioning, as described
+in the guide. The dataset already lives in
 S3; process results and reports go to GCS. SQLite stores metadata on `xcnc17`.
 No project checkout, dataset upload, or project-specific launch script is needed.
 
@@ -36,15 +39,17 @@ environment. For a sibling development checkout:
 $env:MLOPS_WORKSPACE_BASE_DIR = Join-Path $PWD '.credit-card-fraud\workspaces'
 New-Item -ItemType Directory -Force $env:MLOPS_WORKSPACE_BASE_DIR | Out-Null
 
-expops run --compute configs/compute.local.yaml
+expops run configs/compute.local.yaml --local
 ```
 
 The writable workspace avoids the platform's `/tmp` default on Windows.
-ExpOps discovers the project from the current directory, which contains
-`configs/project_config.yaml`. It creates the required project environments;
+ExpOps uses the compute file's `code` mount as the default project root and
+retrieves it into `.expops-sources/credit-card-fraud`. It creates the required project environments;
 you do not install the model or plotting requirements manually. The local
 profile uses two local Dask workers, SQLite, and local input/cache/report mounts,
-so no cloud credentials are needed.
+so no cloud credentials are needed. No worker bootstrap or platform wheel is
+required for local execution. The profile configures Dask's actual
+`local_cluster_kwargs.memory_limit` option rather than a SLURM memory setting.
 
 Repeat the same command to test caching. With an empty metadata database and
 cache, expect 25 executed processes and zero failures. An unchanged repeat with
@@ -56,15 +61,15 @@ prints the run ID, summary, and log path. Check that it exits successfully.
 | Config | Compute | Metadata | Files |
 | --- | --- | --- | --- |
 | `configs/compute.local.yaml` | Two local Dask workers | Project-local SQLite | Local source, input, cache and artefacts |
-| `configs/compute.cloud.yaml` | Two local Dask workers | PostgreSQL | Local source, S3 input, GCS cache and artefacts |
-| `configs/compute_config.yaml` | Two SLURM workers | PostgreSQL | Local source, GCS input, cache and artefacts |
-| `configs/compute.git.slurm.yaml` | Two SLURM workers on `xcnc17` | Node-local SQLite | Git source, S3 input, GCS cache and artefacts |
+| `configs/compute.cloud.yaml` | Two local Dask workers | PostgreSQL | Pinned Git source, S3 input, GCS cache and artefacts |
+| `configs/compute_config.yaml` | Two SLURM workers with node-local venv bootstrap | PostgreSQL | Local source, GCS input, cache and artefacts |
+| `configs/compute.git.slurm.yaml` | Two SLURM workers on `xcnc17` with node-local venv bootstrap | Node-local SQLite | Git source, S3 input, GCS cache and artefacts |
 
 For local workers with cloud storage, provision the credentials and PostgreSQL
 connection referenced by `compute.cloud.yaml`, then run from this repository:
 
 ```powershell
-expops run --compute configs/compute.cloud.yaml
+expops run configs/compute.cloud.yaml --local
 ```
 
 Keep the writable workspace setting from the local example. Omitting `--compute`
@@ -72,17 +77,65 @@ selects `configs/compute_config.yaml`, which is a SLURM/PostgreSQL profile. Use 
 explicit compute config for these examples. There is no `run --config` argument.
 All deployments use the same project definition in `configs/project_config.yaml`.
 
+`--local` overrides compute selection; it does not replace storage configuration.
+In particular, it does not turn the Git/SLURM profile's Linux SQLite path into a
+Windows path or remove database credential requirements from a cloud profile.
+Use `compute.local.yaml` for a fully local run. When overriding a SLURM profile,
+remote bootstrap, interpreter, prologue and scratch options are ignored.
+
+Both SLURM profiles automatically prepare the running ExpOps distribution and
+publish it with requirement snapshots to the configured GCS cache. Workers read
+those verified publications through VFS and install environments on their own
+node. No manual wheel build or runtime mount is required. The explicit NUS base
+Python and credential-file paths still use shared home; another site can
+provision those prerequisites independently on each node. See [the SLURM guide](slurm.md).
+
+## Local deployment settings and remote compute URLs
+
+Copy `expops.env.example` to `expops.env` in your invocation directory and fill
+only the deployment values you need. ExpOps loads it before storage/compute
+resolution; existing shell values take precedence. `--env-file path` selects an
+explicit local file, and `--no-env-file` disables discovery. A local compute
+file's adjacent `expops.env` is a lower-priority fallback. Downloaded project
+environment files are never automatically applied.
+
+After publishing these config changes, the portable cloud profile can be run as:
+
+```bash
+expops run https://github.com/Professional-Procrastinat0r/credit-card-fraud/blob/main/configs/compute.cloud.yaml --local
+```
+
+The code source remains pinned separately from the compute document. The pin
+currently contains `local/...` file declarations, so the Git profiles explicitly
+provide that alias alongside `code`. New project declarations use `code/...`.
+
+Declare one dependency document per independent environment:
+
+```yaml
+environment:
+  fraud-model-env:
+    venv: code/requirements.txt
+  fraud-reporting-env:
+    venv: code/requirements-charts.txt
+```
+
+`options.materialization.cleanup` accepts `always` (default), `on_success`, or
+`never` for worker-owned source/input copies. Active leases defer deletion;
+mounted originals, durable outputs and installed environment caches are retained.
+Application variables are explicitly forwarded with `EXPOPS_WORKER_ENV=NAME,OTHER`;
+loading an env file does not add all its variables to that forwarding list.
+
 ## Mounted source and streaming input
 
-`--project local` in the Git example selects the mount containing the project
-configuration. `local` is a mount alias; this deployment maps it to Git. The
+`code` selects the default mount containing the project configuration. Use
+`--project code/subtree` to explicitly select a subtree. The
 source revision is pinned to `8e76706f5394483d82126dbab671e4ec92639cf3`, independently
 of the branch supplying the compute file. After merging deployment/docs changes,
 the compute-file URL can use `main` without changing that source pin.
 
-Scripts and environment requirements are addressed as `local/src/model.py`,
-`local/src/plot_metrics.py`, `local/requirements.txt`, and
-`local/requirements-charts.txt`. Each compute file defines the actual providers.
+Scripts and environment requirements are addressed as `code/src/model.py`,
+`code/src/plot_metrics.py`, `code/requirements.txt`, and
+`code/requirements-charts.txt`. Each compute file defines the actual providers.
 Local mount `source` paths resolve relative to the compute YAML file.
 
 The project declares its training input as:
@@ -118,6 +171,7 @@ bytes in the Git/SLURM deployment. Retain both to reuse cached results.
 | `.credit-card-fraud/storage/` with the local profile | SQLite metadata, cached results and artefacts |
 | `.expops-sources/credit-card-fraud/` with the Git profile | Retrieved project source, including its `.credit-card-fraud/` runtime directory |
 | Configured workspace directory | Temporary process workspaces |
+| `/var/tmp/e1115319-expops-credit-card-fraud/environments` on each SLURM node | Reusable model and reporting venvs built by worker bootstrap |
 | GCS `credit-card-fraud/slurm-git-s3-sqlite/cache` and `/artefact` | Managed cache payloads and report objects for the Git/SLURM profile |
 
 The chart is `fraud_seed_data_parallel_report.png`. Use the run's chart metadata

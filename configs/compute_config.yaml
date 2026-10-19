@@ -9,7 +9,14 @@ options:
   worker_cores: 1
   worker_memory: "4GB"
   worker_processes: 1
-  walltime: "00:30:00"
+  walltime: "00:45:00"
+  startup_timeout_sec: 1800
+
+  # NUS credentials. Set MLOPS_WORKER_PYTHON and MLOPS_WORKER_BASE_DIR for
+  # deployment paths, or supply worker_python/worker_base_dir YAML overrides.
+  # Project environments and the ExpOps worker package are prepared automatically.
+  job_script_prologue:
+    - 'source "$HOME/.config/expops/cloud.env"'
 
   # Values reported by sacctmgr on xlogin2.
   job_extra:
@@ -50,9 +57,10 @@ storage:
 
   # Mount sources resolve relative to this deployment file.
   mounts:
-    local:
+    code:
       type: local
       source: ..
+      read_only: true
     input:
       type: gcs
       bucket: expops-example-credit-card-fraud

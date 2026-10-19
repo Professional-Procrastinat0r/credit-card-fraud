@@ -9,3 +9,5 @@ data/creditcard.csv
 __pycache__/
 *.py[cod]
 .venv/
+expops.env
+.expops-configs/

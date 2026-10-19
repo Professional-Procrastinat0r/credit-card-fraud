@@ -33,20 +33,25 @@ def test_profiles_resolve_scripts_requirements_and_input_without_clients(profile
     monkeypatch.chdir(tmp_path)  # Caller CWD must not change mount roots.
     plan = resolved(profile)
     project = project_config()
-    assert plan.schema_version == 2
-    assert Path(plan.mounts["local"].backend.root).resolve() == ROOT
+    assert plan.schema_version == 3
+    assert str(plan.virtual_project_root) == "/code"
+    if plan.mounts["code"].type == "local":
+        assert Path(plan.mounts["code"].backend.root).resolve() == ROOT
+    else:
+        assert plan.mounts["code"].type == "git"
     for name, script in project["scripts"].items():
         path = plan.resolve_namespace_path(script, field_name=f"scripts.{name}")
-        assert path.alias == "local"
+        assert path.alias == "code"
         assert (ROOT / path.key).is_file()
     for definition in project["environment"].values():
-        for requirement in definition["venv"]:
-            path = plan.resolve_namespace_path(requirement, field_name="environment.venv")
-            assert path.alias == "local"
-            assert (ROOT / path.key).is_file()
+        requirement = definition["venv"]
+        assert isinstance(requirement, str)
+        path = plan.resolve_namespace_path(requirement, field_name="environment.venv")
+        assert path.alias == "code"
+        assert (ROOT / path.key).is_file()
     data = resolve_data_plan(
         PROJECT_ID, project, DatasetCatalog(), storage_plan=plan,
-        object_store_aliases=frozenset(plan.object_specs), project_root=ROOT,
+        mount_aliases=frozenset(plan.mounts), project_root=ROOT,
     )
     assert data.inputs["training"].store == "input"
     assert str(data.inputs["training"].key) == "creditcard.csv"
@@ -106,7 +111,7 @@ def test_original_parallel_graph_and_parameters_are_preserved():
 
 def test_git_profile_preserves_the_project_and_slurm_storage_without_clients():
     config = yaml.safe_load((ROOT / "configs/compute.git.slurm.yaml").read_text(encoding="utf-8"))
-    git_mount = config["storage"]["mounts"]["local"]
+    git_mount = config["storage"]["mounts"]["code"]
     assert git_mount["type"] == "git"
     assert git_mount["repository"] == "https://github.com/Professional-Procrastinat0r/credit-card-fraud.git"
     assert len(git_mount["revision"]) == 40
@@ -125,7 +130,15 @@ def test_git_profile_preserves_the_project_and_slurm_storage_without_clients():
         assert mounts[alias]["type"] == "gcs"
         assert mounts[alias]["prefix"] == f"credit-card-fraud/slurm-git-s3-sqlite/{alias}"
     plan = resolved("compute.git.slurm.yaml")
-    assert plan.mounts["local"].type == "git"
+    assert plan.mounts["code"].type == "git"
     for script in project_config()["scripts"].values():
-        assert plan.resolve_namespace_path(script).alias == "local"
+        assert plan.resolve_namespace_path(script).alias == "code"
     assert type(plan).from_mapping(plan.to_mapping()) == plan
+
+
+@pytest.mark.parametrize('profile', ['compute_config.yaml', 'compute.git.slurm.yaml'])
+def test_slurm_profiles_do_not_require_manual_platform_packaging(profile):
+    config = yaml.safe_load((ROOT / 'configs' / profile).read_text(encoding='utf-8'))
+    assert 'runtime' not in config['storage']['mounts']
+    assert 'worker_bootstrap' not in config['options']
+    assert not set(config['options']).intersection({'worker_python', 'worker_workspace_base_dir', 'cluster_kwargs'})

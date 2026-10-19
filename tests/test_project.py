@@ -71,8 +71,8 @@ class MemoryInputMount:
 @pytest.fixture(params=["native", "materialize", "stream"])
 def dataset_context(request, tmp_path, monkeypatch):
     """Exercise the old path contract and both real declared-input modes."""
-    from expops.storage.data_sources import LocalDataset, ObjectDataset, ResolvedDataPlan
-    from expops.storage.object_models import ObjectKey
+    from expops.storage.data_sources import LocalDataset, MountedDataset, ResolvedDataPlan
+    from expops.storage.file_models import RelativePath
     from expops.storage.pipeline_inputs import open_pipeline_inputs
 
     materialization_root = tmp_path / "materialized"
@@ -85,7 +85,7 @@ def dataset_context(request, tmp_path, monkeypatch):
             if request.param == "stream":
                 filesystem = MemoryInputMount(frame.to_csv(index=False).encode("utf-8"))
                 mounts.append(filesystem)
-                definition = ObjectDataset("input", ObjectKey("creditcard.csv"))
+                definition = MountedDataset("input", RelativePath("creditcard.csv"))
             else:
                 native = context_for(frame, tmp_path)
                 definition = LocalDataset(str(native.data_paths["training"]))
@@ -191,8 +191,9 @@ def test_seed_summary_retains_real_seeds_and_chart_renders(model, tmp_path, monk
 
 
 def test_stream_and_materialize_have_identical_splits_predictions_and_cache_identity(model, tmp_path):
-    from expops.storage.data_sources import LocalDataset, ObjectDataset, ResolvedDataPlan
-    from expops.storage.object_models import ObjectKey
+    from expops.storage.data_sources import MountedDataset, ResolvedDataPlan
+    from expops.storage.local_files import local_files
+    from expops.storage.file_models import RelativePath
     from expops.storage.pipeline_inputs import open_pipeline_inputs
 
     frame = synthetic_transactions()
@@ -200,13 +201,16 @@ def test_stream_and_materialize_have_identical_splits_predictions_and_cache_iden
     source = MemoryInputMount(native.data_paths["training"].read_bytes())
     outputs, hashes, splits = [], [], []
     for mode in ("materialize", "stream"):
-        definition = (LocalDataset(str(native.data_paths["training"])) if mode == "materialize"
-                      else ObjectDataset("input", ObjectKey("creditcard.csv")))
+        definition = (MountedDataset("files", RelativePath(native.data_paths["training"].name)) if mode == "materialize"
+                      else MountedDataset("input", RelativePath("creditcard.csv")))
         plan = ResolvedDataPlan(
             "fraud-test", inputs={"training": definition},
             dataset_names={"training": "training"}, modes={"training": mode},
         )
-        with open_pipeline_inputs(plan, filesystem=source) as inputs:
+        with ExitStack() as resources:
+            filesystem = (resources.enter_context(local_files(native.data_paths["training"].parent)).session
+                          if mode == "materialize" else source)
+            inputs = resources.enter_context(open_pipeline_inputs(plan, filesystem=filesystem))
             context = SimpleNamespace(inputs=inputs, data_paths=dict(inputs.paths))
             hashes.append(inputs.data_hash)
             splits.append(model._load_train_test(context, 0.2, 42))

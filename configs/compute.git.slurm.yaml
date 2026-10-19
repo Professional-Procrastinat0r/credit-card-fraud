@@ -1,5 +1,5 @@
 # Standalone Git bootstrap: no local credit-card-fraud checkout is required.
-# expops run --project local --compute compute.git.slurm.yaml
+# expops run compute.git.slurm.yaml
 # Pin the project source independently of subsequent deployment/docs changes.
 provider: slurm
 
@@ -12,8 +12,15 @@ options:
   worker_cores: 1
   worker_memory: "4GB"
   worker_processes: 1
-  walltime: "00:30:00"
-  startup_timeout_sec: 600
+  # First-time worker environment installation is part of the job walltime.
+  walltime: "00:45:00"
+  startup_timeout_sec: 1800
+
+  # NUS credentials. slurm.md sets MLOPS_WORKER_PYTHON and MLOPS_WORKER_BASE_DIR
+  # once for this deployment; YAML overrides are also supported.
+  # Named project venvs and the ExpOps worker package are prepared automatically.
+  job_script_prologue:
+    - 'source "$HOME/.config/expops/cloud.env"'
 
   # Values reported by sacctmgr on xlogin2.
   job_extra:
@@ -37,8 +44,12 @@ storage:
       # Choose a directory owned by your cluster account when adapting this file.
       database: /var/tmp/e1115319-expops-credit-card-fraud/metadata.sqlite
 
-  # Keep the project's local/... paths while obtaining their files from Git.
+  # code is the default project root. local is the pinned revision's source alias.
   mounts:
+    code:
+      type: git
+      repository: https://github.com/Professional-Procrastinat0r/credit-card-fraud.git
+      revision: 8e76706f5394483d82126dbab671e4ec92639cf3
     local:
       type: git
       repository: https://github.com/Professional-Procrastinat0r/credit-card-fraud.git
