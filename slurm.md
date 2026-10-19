@@ -84,7 +84,7 @@ this deployment, filled in. It sets:
 | `DASK_DISTRIBUTED__COMM__COMPRESSION` | Common `zlib` codec for Dask communication |
 | `EXPOPS_WORKER_ENV` | Explicitly forwards the two thread limits to workers |
 | `MLOPS_WORKER_PYTHON` | `/home/e/e1115319/fyp-expops/expops-platform/.venv/bin/python`, the provisioned base runtime |
-| `MLOPS_WORKER_BASE_DIR` | `/var/tmp/e1115319-expops-credit-card-fraud`; contains worker `environments/`, `workspaces/`, `dask/` |
+| `MLOPS_WORKER_BASE_DIR` | `/var/tmp/e1115319-expops-credit-card-fraud`; contains worker environments, workspaces, Dask scratch and library caches |
 | `MLOPS_WORKER_ENV_FILE` | `/home/e/e1115319/.config/expops/expops.env`, explicitly loaded on each worker |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Existing `/home/e/e1115319/.config/expops/gcp-adc.json` |
 | `AWS_PROFILE` | Existing `expops` profile |
@@ -92,7 +92,8 @@ this deployment, filled in. It sets:
 
 [The worker example](configs/env/slurm-worker.env.example) contains just those
 four AWS/GCP settings and the thread limits. It deliberately omits driver scratch
-paths. The worker entry point parses it before retrieving bootstrap publications
+paths. Worker startup initializes library scratch/cache beneath the worker base,
+replacing inherited launcher cache paths. The worker entry point parses it before retrieving bootstrap publications
 or starting Dask. The compute YAML needs no credential-sourcing prologue.
 The driver file does not automatically transfer or provision credential files.
 
