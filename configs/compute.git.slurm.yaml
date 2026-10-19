@@ -44,16 +44,12 @@ storage:
       # Choose a directory owned by your cluster account when adapting this file.
       database: /var/tmp/e1115319-expops-credit-card-fraud/metadata.sqlite
 
-  # code is the default project root. local is the pinned revision's source alias.
+  # code is the default project root, pinned independently of this compute file.
   mounts:
     code:
       type: git
       repository: https://github.com/Professional-Procrastinat0r/credit-card-fraud.git
-      revision: 8e76706f5394483d82126dbab671e4ec92639cf3
-    local:
-      type: git
-      repository: https://github.com/Professional-Procrastinat0r/credit-card-fraud.git
-      revision: 8e76706f5394483d82126dbab671e4ec92639cf3
+      revision: 7fdf2ee2d2510e8dbc21677630d65a317dbf4788
     input:
       type: s3
       bucket: expops-test-bucket-755933694771-ap-southeast-1-an

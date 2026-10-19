@@ -90,7 +90,12 @@ node. No manual wheel build or runtime mount is required. The explicit NUS base
 Python and credential-file paths still use shared home; another site can
 provision those prerequisites independently on each node. See [the SLURM guide](slurm.md).
 
-## Local deployment settings and remote compute URLs
+## Local deployment settings and compute config sources
+
+Compute configs accept relative or absolute local YAML paths as well as public
+HTTPS URLs. For example, `expops run configs/compute.local.yaml --local` or
+`expops run /path/to/compute.yaml`. Relative mount sources in a local compute
+file resolve beside that file, independently of the invocation directory.
 
 Copy `expops.env.example` to `expops.env` in your invocation directory and fill
 only the deployment values you need. ExpOps loads it before storage/compute
@@ -99,15 +104,14 @@ explicit local file, and `--no-env-file` disables discovery. A local compute
 file's adjacent `expops.env` is a lower-priority fallback. Downloaded project
 environment files are never automatically applied.
 
-After publishing these config changes, the portable cloud profile can be run as:
+The portable cloud profile can also be run directly from its published URL:
 
 ```bash
 expops run https://github.com/Professional-Procrastinat0r/credit-card-fraud/blob/main/configs/compute.cloud.yaml --local
 ```
 
-The code source remains pinned separately from the compute document. The pin
-currently contains `local/...` file declarations, so the Git profiles explicitly
-provide that alias alongside `code`. New project declarations use `code/...`.
+The code source remains pinned separately from the compute document. Both Git
+profiles provide the `code` mount used by the project declarations.
 
 Declare one dependency document per independent environment:
 
@@ -120,7 +124,7 @@ environment:
 ```
 
 `options.materialization.cleanup` accepts `always` (default), `on_success`, or
-`never` for worker-owned source/input copies. Active leases defer deletion;
+`never` for owned driver input and worker source/input copies. Active leases defer deletion;
 mounted originals, durable outputs and installed environment caches are retained.
 Application variables are explicitly forwarded with `EXPOPS_WORKER_ENV=NAME,OTHER`;
 loading an env file does not add all its variables to that forwarding list.
@@ -129,7 +133,7 @@ loading an env file does not add all its variables to that forwarding list.
 
 `code` selects the default mount containing the project configuration. Use
 `--project code/subtree` to explicitly select a subtree. The
-source revision is pinned to `8e76706f5394483d82126dbab671e4ec92639cf3`, independently
+source revision is pinned to `7fdf2ee2d2510e8dbc21677630d65a317dbf4788`, independently
 of the branch supplying the compute file. After merging deployment/docs changes,
 the compute-file URL can use `main` without changing that source pin.
 

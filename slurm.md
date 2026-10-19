@@ -132,17 +132,25 @@ access. Offline deployments can still supply an advanced
 `worker_bootstrap: {platform_wheel: <mounted-wheel>, wheelhouse: <mounted-wheels>}`
 override containing the required compatible packages.
 
-Transfer the updated compute file from this working checkout. Until these changes
-are published, downloading an older branch URL will retrieve the previous setup.
-From Windows PowerShell in `D:\NUS\FYP`:
+Use a local compute file or a published HTTPS URL. To download this deployment:
 
-```powershell
-scp -o ProxyJump=e1115319@stujump.comp.nus.edu.sg .\credit-card-fraud\configs\compute.git.slurm.yaml e1115319@xlogin.comp.nus.edu.sg:~/fyp-expops/git-s3-gcs-sqlite/compute.git.slurm.yaml
+```bash
+curl --fail --location \
+  "https://raw.githubusercontent.com/Professional-Procrastinat0r/credit-card-fraud/main/configs/compute.git.slurm.yaml" \
+  -o compute.git.slurm.yaml
 ```
 
-Once published, the same compute file can be downloaded without a local project
-checkout. Its project Git source remains pinned to
-`8e76706f5394483d82126dbab671e4ec92639cf3` independently of the deployment file.
+The project Git source remains pinned to
+`7fdf2ee2d2510e8dbc21677630d65a317dbf4788` independently of the deployment file.
+For deployment settings, create an `expops.env` in the invocation directory:
+
+```dotenv
+MLOPS_WORKER_PYTHON=${HOME}/fyp-expops/expops-platform/.venv/bin/python
+MLOPS_WORKER_BASE_DIR=/var/tmp/${USER}-expops-credit-card-fraud
+```
+
+Existing shell values take precedence over this file. The exports shown earlier
+are equivalent; choose whichever suits your deployment. Keep credentials local.
 
 ## 5. Run, check completion and repeat for caching
 
@@ -155,8 +163,8 @@ printf 'ExpOps exit code: %s\n' "$?"
 
 The positional argument selects the compute config; its `code` mount selects
 the default project containing `configs/project_config.yaml`. Use `--project`
-only for an explicit mount/subtree override. The pinned source still uses
-`local/...` declarations, so the config provides that Git alias too.
+only for an explicit mount/subtree override. The pinned project uses `code/...`
+for its scripts and dependency documents.
 ExpOps retrieves the project into `.expops-sources/credit-card-fraud`, loads its
 scripts and requirements, and runs the declared pipeline. You do not separately
 clone/upload the repo or download/upload the already available S3 dataset.
