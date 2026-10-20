@@ -5,8 +5,7 @@
 provider: local
 num_workers: 2
 options:
-  materialization:
-    cleanup: on_success  # Keep owned source/input copies on failure; framework default: always.
+  cleanup: on_success  # Keep owned source/input copies on failure; framework default: always.
   startup_timeout_sec: 90
   local_cluster_kwargs:
     memory_limit: 0

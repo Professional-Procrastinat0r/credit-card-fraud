@@ -99,18 +99,21 @@ All four compute profiles explicitly use:
 
 ```yaml
 options:
-  materialization:
-    cleanup: on_success
+  cleanup: on_success
 ```
 
-This removes owned driver input and worker source/input copies after a successful
+This removes automatically retrieved driver code, temporary dependency/code
+snapshots, driver inputs and worker source/input copies after a successful
 run and retains them after a failed run for debugging. The framework default is
 `always`, which requests cleanup after success or failure; `never` retains completed
 copies in either case. Active leases defer deletion, and incomplete failed delivery
 is removed regardless of policy. Cleanup does not remove mounted originals,
-reports/cache publications, logs, driver `.expops-sources` checkouts or installed
+reports/cache publications, logs, `--prepare-only` checkouts or installed
 environment caches. Retained trees have no automatic age/size garbage collector;
 remove them only when no run/worker is using them. `--local` preserves this policy.
+Ordinary runs use unique `.expops-sources/run-*/credit-card-fraud/` checkouts;
+retained launcher environments and logs live in `.credit-card-fraud/` beside
+`.expops-sources/`. Existing files from older runs are not swept automatically.
 
 ## Mounted source and streaming input
 
@@ -155,8 +158,10 @@ bytes in the Git/SLURM deployment. Retain both to reuse cached results.
 | Location | Purpose |
 | --- | --- |
 | `.credit-card-fraud/` in the original Windows checkout | Configured launcher scratch/cache directories; local cache and artefact mount roots |
-| `.expops-sources/credit-card-fraud/` for either code mount | Retrieved source; `.credit-card-fraud/` beneath it contains launcher environments, snapshots and logs |
-| Retrieved project `.credit-card-fraud/storage/metadata.db` with the local profile | SQLite run metadata and cache indices |
+| `.expops-sources/run-*/credit-card-fraud/` for either code mount | Temporary retrieved source; cleaned according to `options.cleanup` |
+| `.credit-card-fraud/envs/` and `.credit-card-fraud/logs/` | Retained launcher environments and run logs |
+| `.expops-sources/credit-card-fraud/` with `--prepare-only` | Explicitly prepared checkout, retained |
+| Invocation `.credit-card-fraud/storage/metadata.db` with the local profile | Retained SQLite run metadata and cache indices |
 | Configured workspace directory | Temporary process workspaces |
 | `/var/tmp/e1115319-expops-credit-card-fraud/environments` on each SLURM node | Reusable model and reporting venvs built by worker bootstrap |
 | GCS `credit-card-fraud/slurm-git-s3-sqlite/cache` and `/artefact` | Managed cache payloads and report objects for the Git/SLURM profile |

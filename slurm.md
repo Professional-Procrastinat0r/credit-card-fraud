@@ -136,7 +136,7 @@ is `7fdf2ee2d2510e8dbc21677630d65a317dbf4788`, independently of the deployment f
 A public compute URL can replace the local YAML path without changing dotenv
 discovery in the invocation directory.
 
-ExpOps retrieves the project into `.expops-sources/credit-card-fraud`, prepares
+ExpOps retrieves the project into `.expops-sources/run-*/credit-card-fraud`, prepares
 launcher environments, automatically packages/publishes its current worker code
 and requirement snapshots through the GCS cache mount, then submits two worker
 jobs. Each worker builds or reuses model/reporting venvs on its own disk before
@@ -159,7 +159,7 @@ metadata is preserved, so the first run you perform may already use cached value
 The configured process-result cache TTL is 24 hours.
 
 ```bash
-latest_log=$(ls -t .expops-sources/credit-card-fraud/.credit-card-fraud/logs/*.log | head -n 1)
+latest_log=$(ls -t .credit-card-fraud/logs/*.log | head -n 1)
 grep -E 'Process results:|Pipeline completed successfully' "$latest_log"
 
 expops run compute.git.slurm.yaml
@@ -187,7 +187,8 @@ This releases the driver allocation. ExpOps releases its worker jobs itself.
 | `/home/e/e1115319/fyp-expops/expops-platform` | Provisioned platform and base `.venv` |
 | Run `expops.env` | Driver deployment settings; never committed |
 | `/home/e/e1115319/.config/expops/expops.env` | Worker deployment settings; credential bytes remain in their separate files |
-| Run `.expops-sources/credit-card-fraud` | Retrieved source, launcher venvs and logs |
+| Run `.expops-sources/run-*/credit-card-fraud` | Temporary retrieved source, cleaned according to `options.cleanup` |
+| Run `.credit-card-fraud/envs` and `.credit-card-fraud/logs` | Retained launcher environments and logs |
 | Run `cache/expops/worker-packages` | Automatically built and verified reusable worker packages |
 | `/var/tmp/e1115319-expops-credit-card-fraud/environments` | Worker-local installed environments |
 | `/var/tmp/e1115319-expops-credit-card-fraud/metadata.sqlite` on xcnc17 | SQLite run records and cache indices |
@@ -198,12 +199,16 @@ Node cleanup can remove SQLite records and node-local environments. Keep both
 metadata and GCS results to reuse process caches. Installed environments and
 published runtime files are not age/size garbage-collected; remove unused
 entries only when no worker is using them. Both SLURM compute profiles explicitly
-set `options.materialization.cleanup: on_success`: owned driver input and worker
-source/input copies are removed after success and retained after failure for
+set `options.cleanup: on_success`: automatically retrieved driver code, temporary
+dependency/code snapshots, driver input and worker source/input copies are
+removed after success and retained after failure for
 debugging. The framework default, when omitted, is `always`; `never` is also
 available. Active leases defer deletion, and failed partial delivery is removed
-regardless of policy. Driver `.expops-sources` checkouts, logs, mounted originals,
+regardless of policy. Explicit `--prepare-only` checkouts, logs, mounted originals,
 durable publications and successful environment caches are outside this policy.
+Ordinary retrieved checkouts use `.expops-sources/run-*/credit-card-fraud/`;
+launcher environments and logs are retained in `.credit-card-fraud/` in the run
+directory. Existing old runtime trees are not automatically deleted.
 See [the cleanup settings](README.md#deployment-profiles-and-environment-settings).
 
 Platform installation/update is separate from running this project. The current
