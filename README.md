@@ -95,9 +95,22 @@ Use an explicit compute file: the no-argument default is the SLURM/PostgreSQL
 profile. `--local` changes execution, while storage still comes from the selected
 compute file. Use `compute.local.yaml` for a completely local run.
 
-`options.materialization.cleanup` accepts `always`, `on_success`, or `never` for
-owned driver input and worker source/input copies. Active leases defer deletion;
-mounted originals, durable publications and installed environment caches remain.
+All four compute profiles explicitly use:
+
+```yaml
+options:
+  materialization:
+    cleanup: on_success
+```
+
+This removes owned driver input and worker source/input copies after a successful
+run and retains them after a failed run for debugging. The framework default is
+`always`, which requests cleanup after success or failure; `never` retains completed
+copies in either case. Active leases defer deletion, and incomplete failed delivery
+is removed regardless of policy. Cleanup does not remove mounted originals,
+reports/cache publications, logs, driver `.expops-sources` checkouts or installed
+environment caches. Retained trees have no automatic age/size garbage collector;
+remove them only when no run/worker is using them. `--local` preserves this policy.
 
 ## Mounted source and streaming input
 

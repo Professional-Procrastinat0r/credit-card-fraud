@@ -197,8 +197,14 @@ This releases the driver allocation. ExpOps releases its worker jobs itself.
 Node cleanup can remove SQLite records and node-local environments. Keep both
 metadata and GCS results to reuse process caches. Installed environments and
 published runtime files are not age/size garbage-collected; remove unused
-entries only when no worker is using them. Temporary owned source/input copies
-use the platform's materialization cleanup policy.
+entries only when no worker is using them. Both SLURM compute profiles explicitly
+set `options.materialization.cleanup: on_success`: owned driver input and worker
+source/input copies are removed after success and retained after failure for
+debugging. The framework default, when omitted, is `always`; `never` is also
+available. Active leases defer deletion, and failed partial delivery is removed
+regardless of policy. Driver `.expops-sources` checkouts, logs, mounted originals,
+durable publications and successful environment caches are outside this policy.
+See [the cleanup settings](README.md#deployment-profiles-and-environment-settings).
 
 Platform installation/update is separate from running this project. The current
 working platform has already been uploaded and installed at the path above.

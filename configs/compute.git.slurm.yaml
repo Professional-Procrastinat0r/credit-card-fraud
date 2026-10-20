@@ -8,6 +8,8 @@ provider: slurm
 num_workers: 2
 
 options:
+  materialization:
+    cleanup: on_success  # Keep owned source/input copies on failure; framework default: always.
   queue: "normal"
   worker_cores: 1
   worker_memory: "4GB"
