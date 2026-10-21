@@ -11,3 +11,6 @@ __pycache__/
 .venv/
 expops.env
 .expops-configs/
+
+# Generated local code-analysis output
+graphify-out/

@@ -47,6 +47,15 @@ have been provisioned in the locations used by the guide. The AWS/GCP credential
 files remain outside the project. On another deployment, provision equivalent
 base Python and credentials on each worker and change these explicit paths.
 
+Workers retrieve selected experiment code and reporting helpers directly from
+the declared source mounts through VFS. Dask sends file addresses and expected
+hashes; each worker verifies and executes its own local copy. Git source commits
+are pinned for worker retrieval. With a local code mount, its configured path and
+matching files must be accessible on every worker; ExpOps does not copy an
+inaccessible local checkout through Dask. The driver's temporary checkout does
+not need to be shared. Source copies follow `options.cleanup`; mount originals
+are retained.
+
 ## Deployment profiles and environment settings
 
 | Compute file | Execution | Metadata | Mounted files | Dotenv example |
@@ -78,7 +87,7 @@ ExpOps passes its path in the compute plan and workers load it before provider
 access and environment installation. It is not a launcher file copied to workers.
 Only explicitly selected worker files are loaded; retrieved project dotenv files
 are excluded from delivery and never automatically applied. Application variables
-can be explicitly forwarded with `EXPOPS_WORKER_ENV=NAME,OTHER`; the examples
+can be explicitly forwarded with `MLOPS_WORKER_ENV=NAME,OTHER`; the examples
 forward the two thread limits. Worker credential paths come from the worker file.
 
 Compute configs accept relative/absolute local YAML paths and public HTTPS URLs:

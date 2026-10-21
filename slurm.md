@@ -84,7 +84,7 @@ this deployment, filled in. It sets:
 | `MLOPS_WORKSPACE_BASE_DIR`, `MLOPS_DATA_MATERIALIZATION_DIR` | Launcher process workspaces and owned input copies |
 | `OPENBLAS_NUM_THREADS`, `OMP_NUM_THREADS` | One numerical-computation thread per one-core task |
 | `DASK_DISTRIBUTED__COMM__COMPRESSION` | Common `zlib` codec for Dask communication |
-| `EXPOPS_WORKER_ENV` | Explicitly forwards the two thread limits to workers |
+| `MLOPS_WORKER_ENV` | Explicitly forwards the two thread limits to workers |
 | `MLOPS_WORKER_PYTHON` | `/home/e/e1115319/fyp-expops/expops-platform/.venv/bin/python`, the provisioned base runtime |
 | `MLOPS_WORKER_BASE_DIR` | `/var/tmp/e1115319-expops-credit-card-fraud`; contains worker environments, workspaces, Dask scratch and library caches |
 | `MLOPS_WORKER_ENV_FILE` | `/home/e/e1115319/.config/expops/expops.env`, explicitly loaded on each worker |
@@ -109,8 +109,16 @@ Existing shell variables take precedence over dotenv, so start from a fresh
 login shell when checking modified settings. No ordinary Python, pip, curl or
 shell command automatically loads this file: ExpOps loads it for its invocation
 and child processes. That is why the directories are created explicitly above.
-The NUS small `/tmp` quota makes these configured launcher/worker scratch paths
-necessary. For quota diagnostics, run `quota -s` if the command is available,
+These scratch overrides provide predictable placement and avoid quota issues
+observed in earlier NUS allocations. They are deployment choices, not framework
+requirements: a clean-environment run on xcnc42 also completed with only
+`GOOGLE_APPLICATION_CREDENTIALS`, `AWS_SHARED_CREDENTIALS_FILE` and
+`MLOPS_WORKER_ENV_FILE` supplied on the driver, and the two credential references
+in the selected worker file. The activated base-runtime PATH supplied `python3`;
+default `/tmp` placement was sufficient on that node. Capacity can differ across
+nodes. NUS jobs have private `/tmp` filesystems, so retain a persistent
+`MLOPS_WORKER_BASE_DIR` when worker environments should be reused between jobs.
+For quota diagnostics, run `quota -s` if the command is available,
 plus `df -h /tmp /var/tmp "$HOME"` and `df -i /tmp /var/tmp "$HOME"`; free global
 disk space alone does not establish your per-user quota.
 
@@ -137,10 +145,14 @@ A public compute URL can replace the local YAML path without changing dotenv
 discovery in the invocation directory.
 
 ExpOps retrieves the project into `.expops-sources/run-*/credit-card-fraud`, prepares
-launcher environments, automatically packages/publishes its current worker code
+launcher environments, automatically packages/publishes its current ExpOps platform wheel
 and requirement snapshots through the GCS cache mount, then submits two worker
 jobs. Each worker builds or reuses model/reporting venvs on its own disk before
-starting Dask. Source delivery uses Dask; input and managed publications use VFS.
+starting Dask. Dask sends experiment source addresses and hashes; each worker
+retrieves the selected code and reporting files directly from the Git mount
+through VFS, verifies them, and executes its own local copy. Input reads and
+managed publications also use VFS. Worker Git/cloud credentials and network
+access must be available; no shared project checkout is assumed.
 No project checkout, dataset upload or runtime mount is required.
 
 Worker first-time installation counts against the 45-minute job walltime;
