@@ -84,20 +84,23 @@ this deployment, filled in. It sets:
 | `MLOPS_WORKSPACE_BASE_DIR`, `MLOPS_DATA_MATERIALIZATION_DIR` | Launcher process workspaces and owned input copies |
 | `OPENBLAS_NUM_THREADS`, `OMP_NUM_THREADS` | One numerical-computation thread per one-core task |
 | `DASK_DISTRIBUTED__COMM__COMPRESSION` | Common `zlib` codec for Dask communication |
-| `MLOPS_WORKER_ENV` | Explicitly forwards the two thread limits to workers |
 | `MLOPS_WORKER_PYTHON` | `/home/e/e1115319/fyp-expops/expops-platform/.venv/bin/python`, the provisioned base runtime |
 | `MLOPS_WORKER_BASE_DIR` | `/var/tmp/e1115319-expops-credit-card-fraud`; contains worker environments, workspaces, Dask scratch and library caches |
-| `MLOPS_WORKER_ENV_FILE` | `/home/e/e1115319/.config/expops/expops.env`, explicitly loaded on each worker |
+| `MLOPS_WORKER_ENV_FILE` | `/home/e/e1115319/.config/expops/expops.env`, read on the driver and delivered before worker bootstrap |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Existing `/home/e/e1115319/.config/expops/gcp-adc.json` |
 | `AWS_PROFILE` | Existing `expops` profile |
 | `AWS_SHARED_CREDENTIALS_FILE`, `AWS_CONFIG_FILE` | Existing `aws-expops-credentials` and `aws-expops-config` under `/home/e/e1115319/.config/expops/` |
 
-[The worker example](configs/env/slurm-worker.env.example) contains just those
+[The additional worker-settings example](configs/env/slurm-worker.env.example) contains just those
 four AWS/GCP settings and the thread limits. It deliberately omits driver scratch
 paths. Worker startup initializes library scratch/cache beneath the worker base,
-replacing inherited launcher cache paths. The worker entry point parses it before retrieving bootstrap publications
-or starting Dask. The compute YAML needs no credential-sourcing prologue.
-The driver file does not automatically transfer or provision credential files.
+providing defaults for library cache paths. Explicit values declared in the
+driver deployment file are forwarded too and take precedence; its filled-in
+shared-home paths are accessible on this NUS deployment. The driver parses this file and reads referenced credential bytes through VFS.
+Each worker creates private copies before retrieving bootstrap publications or
+starting Dask; original credential/dotenv paths need not be shared. The compute YAML needs no credential-sourcing prologue.
+Credential bytes travel privately, outside source archives and cache publications.
+Their worker copies are removed regardless of code/data retention.
 
 No DB password is needed for this SQLite profile. The optional PostgreSQL profile
 `compute_config.yaml` additionally requires
@@ -105,7 +108,11 @@ No DB password is needed for this SQLite profile. The optional PostgreSQL profil
 and database network access. Redis/Supabase outbound connectivity is not a
 prerequisite for the primary workflow.
 
-Existing shell variables take precedence over dotenv, so start from a fresh
+Explicit `deployment.variables` in compute YAML override shell and dotenv values.
+All effective dotenv/inline values are automatically forwarded before worker
+bootstrap; no thread-variable allowlist is needed. `deployment.env_file` can
+select one local file explicitly (relative to the YAML, or invocation directory
+for a public URL). Existing shell variables take precedence over dotenv, so start from a fresh
 login shell when checking modified settings. No ordinary Python, pip, curl or
 shell command automatically loads this file: ExpOps loads it for its invocation
 and child processes. That is why the directories are created explicitly above.
@@ -139,27 +146,32 @@ valid. Activation does not load `expops.env`; ExpOps loads that file when invoke
 Workers still use the base interpreter configured by `MLOPS_WORKER_PYTHON`.
 The `--prepare-only` command is an optional source check; the following command
 performs the full run.
-No `--project` is necessary: `code` is the default project mount. Its source pin
-is `7fdf2ee2d2510e8dbc21677630d65a317dbf4788`, independently of the deployment file.
+No `--project` is necessary: `code` is the default project mount. Its plain GitHub
+URL selects the repository's default branch. The resolved commit is recorded
+and kept fixed for the run. Use `/tree/<full-commit>` to pin a source revision.
 A public compute URL can replace the local YAML path without changing dotenv
 discovery in the invocation directory.
 
 ExpOps retrieves the project into `.expops-sources/run-*/credit-card-fraud`, prepares
-launcher environments, automatically packages/publishes its current ExpOps platform wheel
-and requirement snapshots through the GCS cache mount, then submits two worker
-jobs. Each worker builds or reuses model/reporting venvs on its own disk before
-starting Dask. Dask sends experiment source addresses and hashes; each worker
-retrieves the selected code and reporting files directly from the Git mount
-through VFS, verifies them, and executes its own local copy. Input reads and
-managed publications also use VFS. Worker Git/cloud credentials and network
-access must be available; no shared project checkout is assumed.
+launcher environments, and resolves complete model/reporting wheel bundles on
+the driver. It makes the bundles available over Dask before submitting two worker
+jobs; environment files no longer pass through the GCS cache mount. Each worker
+uses a lightweight Dask client to receive the wheels, then installs offline or
+reuses valid model/reporting venvs on its own disk before starting its task worker.
+The driver sends a verified source bundle through Dask; workers
+extract experiment code, helpers and reporting files into their owned local
+workspaces. They do not retrieve executable code from Git themselves. Input
+reads and managed publications still use VFS and require worker cloud access.
+No shared project checkout is assumed.
 No project checkout, dataset upload or runtime mount is required.
 
 Worker first-time installation counts against the 45-minute job walltime;
 `startup_timeout_sec: 1800` allows up to 30 minutes for workers to become ready.
-The base interpreter must already contain the current ExpOps, `python-dotenv`
-and provider SDKs. This installation has been uploaded for you. Another cluster
-can provision its base runtime/credential files separately on each worker.
+The base interpreter must already contain the current ExpOps and compatible
+Dask/distributed packages. The changed platform runtime must be uploaded before
+testing this flow on Slurm. Another cluster
+must provision its base runtime on workers. Driver credential files are
+transferred automatically for supported provider/file-secret references.
 The NUS paths explicitly use shared home for these deployment prerequisites;
 project venvs and worker scratch are node-local.
 
@@ -198,18 +210,18 @@ This releases the driver allocation. ExpOps releases its worker jobs itself.
 | --- | --- |
 | `/home/e/e1115319/fyp-expops/expops-platform` | Provisioned platform and base `.venv` |
 | Run `expops.env` | Driver deployment settings; never committed |
-| `/home/e/e1115319/.config/expops/expops.env` | Worker deployment settings; credential bytes remain in their separate files |
+| `/home/e/e1115319/.config/expops/expops.env` | Additional driver-readable settings; values and credential bytes are delivered |
 | Run `.expops-sources/run-*/credit-card-fraud` | Temporary retrieved source, cleaned according to `options.cleanup` |
 | Run `.credit-card-fraud/envs` and `.credit-card-fraud/logs` | Retained launcher environments and logs |
-| Run `cache/expops/worker-packages` | Automatically built and verified reusable worker packages |
+| Run `cache/expops/worker-packages` and `cache/expops/worker-wheels` | Verified driver platform packages and resolved dependency wheel bundles |
 | `/var/tmp/e1115319-expops-credit-card-fraud/environments` | Worker-local installed environments |
 | `/var/tmp/e1115319-expops-credit-card-fraud/metadata.sqlite` on xcnc17 | SQLite run records and cache indices |
 | S3 `expops-test-bucket-755933694771-ap-southeast-1-an/credit-card-fraud/dataset` | Training CSV |
-| GCS `expops-example-credit-card-fraud/credit-card-fraud/slurm-git-s3-sqlite/cache` and `/artefact` | Managed results, runtime publications and reports |
+| GCS `expops-example-credit-card-fraud/credit-card-fraud/slurm-git-s3-sqlite/cache` and `/artefact` | Managed experiment results and reports; no new environment installation publications |
 
 Node cleanup can remove SQLite records and node-local environments. Keep both
 metadata and GCS results to reuse process caches. Installed environments and
-published runtime files are not age/size garbage-collected; remove unused
+driver package caches are not age/size garbage-collected; remove unused
 entries only when no worker is using them. Both SLURM compute profiles explicitly
 set `options.cleanup: on_success`: automatically retrieved driver code, temporary
 dependency/code snapshots, driver input and worker source/input copies are

@@ -36,8 +36,8 @@ and these filled-in dotenv examples:
 - [Local Windows](configs/env/local.windows.env.example): all launcher paths and thread settings.
 - [NUS SLURM driver](configs/env/slurm.env.example): launcher scratch/cache paths,
   worker interpreter/base directory, worker dotenv location and credential-file references.
-- [NUS SLURM worker](configs/env/slurm-worker.env.example): existing node-provisioned
-  AWS/GCP credential references and thread settings, loaded by Python before bootstrap.
+- [NUS SLURM worker](configs/env/slurm-worker.env.example): additional driver-readable
+  credential references and thread settings, transferred before worker bootstrap.
 - [Windows cloud alternative](configs/env/cloud.windows.env.example): local settings
   plus the PostgreSQL password placeholder and existing GCP ADC location.
 
@@ -45,16 +45,15 @@ The primary SLURM profile uses Git code, S3 input, GCS outputs and node-local
 SQLite. It needs no database password. Platform code and the NUS dotenv files
 have been provisioned in the locations used by the guide. The AWS/GCP credential
 files remain outside the project. On another deployment, provision equivalent
-base Python and credentials on each worker and change these explicit paths.
+base Python on each worker and driver credentials. ExpOps transfers supported
+credential-file bytes and creates private worker-local copies.
 
-Workers retrieve selected experiment code and reporting helpers directly from
-the declared source mounts through VFS. Dask sends file addresses and expected
-hashes; each worker verifies and executes its own local copy. Git source commits
-are pinned for worker retrieval. With a local code mount, its configured path and
-matching files must be accessible on every worker; ExpOps does not copy an
-inaccessible local checkout through Dask. The driver's temporary checkout does
-not need to be shared. Source copies follow `options.cleanup`; mount originals
-are retained.
+The driver retrieves project source through VFS and sends selected experiment
+code, helper files and reporting code to workers as a verified Dask source bundle.
+Workers execute their own local copies without accessing the original code mount
+or driver checkout. Datasets, cache and artefact operations continue through VFS;
+local mounts used by those operations must be accessible to their consumers.
+Source copies follow `options.cleanup`; mount originals are retained.
 
 ## Deployment profiles and environment settings
 
@@ -74,21 +73,42 @@ Do not run the PostgreSQL alternative from NUS unless its database is reachable.
 The Redis block is a commented alternative, not a prerequisite; if explicitly
 enabled, use `CREDIT_CARD_FRAUD_REDIS_PASSWORD=REPLACE_WITH_REDIS_PASSWORD`.
 
-ExpOps loads `expops.env` in the invocation directory before resolving storage
-and compute. It is dotenv syntax, not a shell script: use `NAME=value`; `${NAME}`
-references work, but commands, `source`, activation and `$(...)` are not executed.
-Existing shell variables win. A file beside a local compute YAML is a lower
-priority fallback; `--env-file /path/to/expops.env` selects an explicit file and
-`--no-env-file` disables driver discovery. Existing shell values from an earlier
-session can override edits, so use a fresh shell when testing changed settings.
+ExpOps discovers `expops.env` in the invocation directory before resolving
+storage and compute. You can instead select a file and explicit values in compute
+YAML:
 
-`MLOPS_WORKER_ENV_FILE` selects a separately provisioned worker-native dotenv.
-ExpOps passes its path in the compute plan and workers load it before provider
-access and environment installation. It is not a launcher file copied to workers.
-Only explicitly selected worker files are loaded; retrieved project dotenv files
-are excluded from delivery and never automatically applied. Application variables
-can be explicitly forwarded with `MLOPS_WORKER_ENV=NAME,OTHER`; the examples
-forward the two thread limits. Worker credential paths come from the worker file.
+```yaml
+deployment:
+  env_file: ../expops.env  # Relative to a local YAML in configs/.
+  variables:
+    OMP_NUM_THREADS: "1"
+```
+
+For a YAML copied beside its dotenv file, or a public compute URL, use
+`env_file: ./expops.env`; remote compute declarations refer to local deployment
+files relative to the invocation directory. The checked-in profiles keep
+automatic file discovery so the same file also works when copied to SLURM.
+Their explicit thread limits demonstrate `deployment.variables`.
+
+Precedence is explicit YAML variables, then existing shell variables, then dotenv.
+Quote YAML values as strings. `--env-file /path/to/expops.env` overrides file
+selection; `--no-env-file` disables file loading but retains inline variables.
+Dotenv supports `${NAME}` references; shell commands, `source`, activation and
+`$(...)` are not executed. Use a fresh shell when testing changed dotenv values.
+
+All effective values declared by dotenv or `deployment.variables` are forwarded
+to workers automatically, before SLURM environment installation and project
+imports. `MLOPS_WORKER_ENV` is only needed for extra shell-only variables.
+The driver reads known credential files through VFS and delivers their bytes;
+workers use private local copies, so original credential paths need not exist
+there. Ordinary temporary/cache directory settings still apply on consuming
+workers; those directories are not files to transfer. The filled-in NUS paths use accessible shared home; worker execution
+workspaces and environment installation roots still come from the worker options.
+
+`MLOPS_WORKER_ENV_FILE` optionally selects another driver-readable dotenv. Its
+values and credential-file bytes are transferred before bootstrap; workers never
+read the original dotenv path. Main driver deployment values take precedence. Downloaded project dotenv files are excluded from code delivery
+and are never automatically loaded.
 
 Compute configs accept relative/absolute local YAML paths and public HTTPS URLs:
 
@@ -128,9 +148,11 @@ retained launcher environments and logs live in `.credit-card-fraud/` beside
 
 `code` selects the default mount containing the project configuration. Use
 `--project code/subtree` to explicitly select a subtree. The
-source revision is pinned to `7fdf2ee2d2510e8dbc21677630d65a317dbf4788`, independently
-of the branch supplying the compute file. After merging deployment/docs changes,
-the compute-file URL can use `main` without changing that source pin.
+Git/SLURM profile follows the code repository's default branch. Its resolved
+commit is fixed for the run and recorded during retrieval. The cloud/local-worker
+profile retains its explicit commit URL. To freeze a Git source, use a normal
+GitHub `/tree/<full-commit>` URL; `/tree/<branch-or-tag>` selects that ref.
+No separate repository/revision fields or custom URL fragments are needed.
 
 Scripts and environment requirements are addressed as `code/src/model.py`,
 `code/src/plot_metrics.py`, `code/requirements.txt`, and

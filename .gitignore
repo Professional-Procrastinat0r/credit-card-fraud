@@ -10,6 +10,7 @@ __pycache__/
 *.py[cod]
 .venv/
 expops.env
+_expops.env
 .expops-configs/
 
 # Generated local code-analysis output

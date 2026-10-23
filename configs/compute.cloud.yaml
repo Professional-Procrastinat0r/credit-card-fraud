@@ -4,6 +4,13 @@
 # Local model/reporting environments are prepared automatically on this host.
 provider: local
 num_workers: 2
+
+# expops.env is discovered locally; these explicit values take precedence.
+# Optionally add env_file under deployment to select another local file.
+deployment:
+  variables:
+    OPENBLAS_NUM_THREADS: "1"
+    OMP_NUM_THREADS: "1"
 options:
   cleanup: on_success  # Keep owned source/input copies on failure; framework default: always.
   startup_timeout_sec: 90
@@ -39,8 +46,7 @@ storage:
   mounts:
     code:
       type: git
-      repository: https://github.com/Professional-Procrastinat0r/credit-card-fraud.git
-      revision: 7fdf2ee2d2510e8dbc21677630d65a317dbf4788
+      url: https://github.com/Professional-Procrastinat0r/credit-card-fraud/tree/7fdf2ee2d2510e8dbc21677630d65a317dbf4788
     input:
       # type: gcs
       # bucket: expops-example-credit-card-fraud

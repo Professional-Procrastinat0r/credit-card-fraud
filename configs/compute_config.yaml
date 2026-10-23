@@ -4,6 +4,13 @@ provider: slurm
 # to nine scoring branches, which Dask will process in waves across two workers.
 num_workers: 2
 
+# expops.env is discovered locally; these explicit values take precedence.
+# Optionally add env_file under deployment to select another local file.
+deployment:
+  variables:
+    OPENBLAS_NUM_THREADS: "1"
+    OMP_NUM_THREADS: "1"
+
 options:
   cleanup: on_success  # Keep owned source/input copies on failure; framework default: always.
   queue: "normal"
