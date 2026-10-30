@@ -1,0 +1,33 @@
+# Mount sources resolve relative to this file. Metadata resolves from project root.
+provider: local
+num_workers: 3
+options:
+  startup_timeout_sec: 120
+  local_cluster_kwargs:
+    memory_limit: 0
+deployment:
+  variables:
+    OPENBLAS_NUM_THREADS: "1"
+    OMP_NUM_THREADS: "1"
+    MKL_NUM_THREADS: "1"
+storage:
+  metadata:
+    type: sqlite
+    path: .process-parallelism/storage/metadata.sqlite
+  mounts:
+    code:
+      type: local
+      source: ..
+      read_only: true
+    input:
+      type: local
+      source: ../../../data
+      read_only: true
+    cache:
+      type: local
+      source: ../.process-parallelism/storage/cache
+      policy:
+        ttl_hours: 720
+    artefact:
+      type: local
+      source: ../.process-parallelism/storage/artefact

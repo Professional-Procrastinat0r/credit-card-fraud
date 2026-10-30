@@ -1,5 +1,13 @@
 # Credit Card Fraud Detection with ExpOps
 
+## Process-parallelism experiment
+
+The standalone three-model experiment used for the FYP process-parallelism
+benchmark is in [experiments/process-parallelism](experiments/process-parallelism/README.md).
+It includes project/compute configs, pinned scientific dependencies and native
+ExpOps run instructions for one or three local workers. The original experiment
+below remains available.
+
 The fraud experiment trains three models with split seeds 41, 42 and 43, evaluates
 three held-out partitions per seed, and publishes an aggregated metrics chart.
 The expanded pipeline has 25 processes. The same project runs locally or on SLURM.

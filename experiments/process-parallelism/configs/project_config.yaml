@@ -1,0 +1,147 @@
+metadata:
+  name: process-parallelism
+  description: Distinct fraud analyses with process parallelism
+scripts:
+  main: code/src/main.py
+environment:
+  system: {}
+reproducibility:
+  random_seed: 42
+experiment:
+  pipeline:
+    process_adjlist: |-
+      prepare split
+      split prepare_supervised
+      prepare_supervised train_supervised
+      train_supervised score_supervised
+      split prepare_isolation
+      prepare_isolation train_isolation
+      train_isolation score_isolation
+      split prepare_autoencoder
+      prepare_autoencoder train_autoencoder
+      train_autoencoder score_autoencoder
+      score_supervised compare
+      score_isolation compare
+      score_autoencoder compare
+      compare collect
+    processes:
+    - name: prepare
+      code: main.run_stage
+      parameters:
+        operation: load
+        dependency_keys: []
+        arguments:
+          max_rows: null
+        output_key: prepare
+    - name: split
+      code: main.run_stage
+      parameters:
+        operation: split
+        dependency_keys:
+        - prepare
+        arguments: {}
+        output_key: split
+    - name: prepare_supervised
+      code: main.run_stage
+      parameters:
+        operation: prepare_branch
+        dependency_keys:
+        - split
+        arguments:
+          branch: supervised
+        output_key: prepare_supervised
+    - name: train_supervised
+      code: main.run_stage
+      parameters:
+        operation: train
+        dependency_keys:
+        - prepare_supervised
+        arguments:
+          branch: supervised
+          iterations: 150
+        output_key: train_supervised
+    - name: score_supervised
+      code: main.run_stage
+      parameters:
+        operation: score
+        dependency_keys:
+        - train_supervised
+        arguments: {}
+        output_key: score_supervised
+    - name: prepare_isolation
+      code: main.run_stage
+      parameters:
+        operation: prepare_branch
+        dependency_keys:
+        - split
+        arguments:
+          branch: isolation
+        output_key: prepare_isolation
+    - name: train_isolation
+      code: main.run_stage
+      parameters:
+        operation: train
+        dependency_keys:
+        - prepare_isolation
+        arguments:
+          branch: isolation
+          trees: 300
+        output_key: train_isolation
+    - name: score_isolation
+      code: main.run_stage
+      parameters:
+        operation: score
+        dependency_keys:
+        - train_isolation
+        arguments: {}
+        output_key: score_isolation
+    - name: prepare_autoencoder
+      code: main.run_stage
+      parameters:
+        operation: prepare_branch
+        dependency_keys:
+        - split
+        arguments:
+          branch: autoencoder
+        output_key: prepare_autoencoder
+    - name: train_autoencoder
+      code: main.run_stage
+      parameters:
+        operation: train
+        dependency_keys:
+        - prepare_autoencoder
+        arguments:
+          branch: autoencoder
+          epochs: 50
+        output_key: train_autoencoder
+    - name: score_autoencoder
+      code: main.run_stage
+      parameters:
+        operation: score
+        dependency_keys:
+        - train_autoencoder
+        arguments: {}
+        output_key: score_autoencoder
+    - name: compare
+      code: main.run_stage
+      parameters:
+        operation: compare
+        dependency_keys:
+        - score_supervised
+        - score_isolation
+        - score_autoencoder
+        arguments: {}
+        output_key: compare
+    - name: collect
+      code: main.run_stage
+      parameters:
+        operation: publish
+        dependency_keys:
+        - compare
+        arguments: {}
+        output_key: collect
+data:
+  inputs:
+    training:
+      path: input/creditcard.csv
+      mode: stream
