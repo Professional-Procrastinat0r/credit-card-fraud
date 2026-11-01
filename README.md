@@ -1,5 +1,10 @@
 # Credit Card Fraud Detection with ExpOps
 
+> **Original-platform test branch:** follow [LEGACY_BASELINE.md](LEGACY_BASELINE.md).
+> This branch targets platform `main` at `a3e6107` and the original webapp/SDK 0.1.3.
+> The older results and runtime snapshot below are historical, not measurements
+> for the isolated Python 3.10 compatibility environment.
+
 This project uses ExpOps to train class-weighted logistic-regression fraud detectors across several split seeds and evaluate each model's held-out predictions with data parallelism. The earlier baseline, seed-only, and data-only experiments remain available as controls.
 
 ## Experiment contract

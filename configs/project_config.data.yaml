@@ -24,6 +24,7 @@ experiment:
   cache:
     backend:
       type: local
+      path: kv_store.db
 
   pipeline:
     process_adjlist: |

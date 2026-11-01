@@ -24,6 +24,7 @@ experiment:
   cache:
     backend:
       type: local
+      path: kv_store.db
       # gcp_project: "exp-ops-506607"
 
     # Leave object_store unset to use the local filesystem. The commented

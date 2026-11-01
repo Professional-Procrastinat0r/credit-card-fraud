@@ -1,0 +1,21 @@
+provider: slurm
+
+# Start conservatively for the first cluster run. The active pipeline expands
+# to nine scoring branches, which Dask will process in waves across two workers.
+num_workers: 2
+
+options:
+  queue: "normal"
+  worker_cores: 1
+  worker_memory: "4GB"
+  worker_processes: 1
+  walltime: "00:30:00"
+
+  # Values reported by sacctmgr on xlogin2.
+  job_extra:
+    - "--account=allusers"
+    - "--qos=normal"
+
+  # Keep both workers eligible for the same node during the smoke run. We can
+  # enable node spreading later when measuring multi-node scaling.
+  spread_workers_across_nodes: false
